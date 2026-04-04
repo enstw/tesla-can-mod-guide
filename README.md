@@ -9,6 +9,7 @@
 | [Enhance Auto Gen 2 Cable](https://www.enhauto.com/products/tesla-gen-2-cable) | Select variant **"Model 3 Highland 2024+"** (€13.39). Plugs into X179 on the vehicle side. The other end has a proprietary S3XY Commander connector — you will **cut it off** to get bare wires for CAN + power (see Cable Modification below). |
 | MP1584EN Fixed 5V 3A Buck Converter | Fixed 5V output, ~22×17mm. Input 4.5–28V, no adjustment needed. The RP2040 board runs on 5V and has no built-in 12V regulator (unlike the S3XY Commander which regulates 12V internally), so an external step-down converter is required. Wire OUT+/OUT− to a USB-C breakout board or directly to the Feather's USB/GND pads. |
 | [Adafruit Feather RP2040 CAN](https://www.adafruit.com/product/5724) | MCP2515 CAN controller. Has screw terminal for CAN-H / CAN-L. |
+| Heat shrink tubing (flat width ≥ 75mm) | Insulates and dust-proofs the board. Shrinks to fit ~50mm width. |
 
 ## Board Preparation
 
@@ -23,8 +24,8 @@
 The Enhance Auto Gen 2 Cable is designed for the S3XY Commander — it has a **proprietary connector** on the Commander end, not loose wires. To use it with the RP2040 board, cut off the Commander-side connector:
 
 1. Identify the Commander-side connector (the smaller end, not the X179 vehicle plug)
-2. Cut the wires **just below the connector housing** to preserve maximum wire length
-3. Strip ~5mm of insulation from each wire
+1. Cut the wires **just below the connector housing** to preserve maximum wire length
+1. Strip ~5mm of insulation from each wire
 
 You now have an X179 pigtail cable with bare wires carrying both CAN signals and 12V power.
 
@@ -75,31 +76,40 @@ Video walkthrough: [Enhance Auto installation video](https://youtube.com/watch?v
 Connect the Gen 2 cable's loose wires to the board and MP1584EN converter:
 
 1. **CAN-H** (black with stripe) → board screw terminal **H**
-2. **CAN-L** (black solid) → board screw terminal **L**
-3. **12V+** (red) → MP1584EN **IN+**
-4. **GND** (black) → MP1584EN **IN−**
-5. MP1584EN **OUT+** → USB-C breakout **VBUS** (or Feather **USB** pad)
-6. MP1584EN **OUT−** → USB-C breakout **GND** (or Feather **GND** pad)
-7. USB-C breakout → Feather USB-C port (if using breakout board)
-8. Leave the "Other Bus" pair disconnected
+1. **CAN-L** (black solid) → board screw terminal **L**
+1. **12V+** (red) → MP1584EN **IN+**
+1. **GND** (black) → MP1584EN **IN−**
+1. MP1584EN **OUT+** → USB-C breakout **VBUS** (or Feather **USB** pad)
+1. MP1584EN **OUT−** → USB-C breakout **GND** (or Feather **GND** pad)
+1. USB-C breakout → Feather USB-C port (if using breakout board)
+1. Leave the "Other Bus" pair disconnected
 
 > **Tip:** The easiest approach is to solder the MP1584EN output to a USB-C breakout board, then plug into the Feather with a short USB-C cable. Alternatively, solder directly to the Feather's **USB** and **GND** pads on the back of the board.
 
 ![Completed wiring](images/connected-setup.png)
 *Completed setup — Feather RP2040 CAN + DC/DC converter, ready to plug in*
 
-### Step 4: Plug into the car
+### Step 4: Wrap with heat shrink tubing
+
+The Feather RP2040 CAN has exposed solder joints on the bottom side. Wrapping the board prevents short circuits against metal surfaces in the footwell and keeps dust out.
+
+1. Connect all wires first (CAN-H, CAN-L, USB-C power)
+1. Slide a flat heat shrink tube (≥ 75mm flat width) over the board, with wires exiting from both ends
+1. Use a heat gun to shrink — it will conform tightly to the board
+1. Seal any gaps at the wire exits with a dab of hot glue
+
+### Step 5: Plug into the car
 
 Plug the cable's vehicle-side connector into the X179 port — it clicks into place. The board powers on automatically when the car wakes up.
 
-### Step 5: Flash the firmware
+### Step 6: Flash the firmware
 
 If you haven't already flashed the firmware:
 
 1. Hold **BOOTSEL** on the board while connecting to USB
-2. A drive named **RPI-RP2** appears
-3. Drag `firmware.uf2` onto the drive
-4. Board reboots automatically — done
+1. A drive named **RPI-RP2** appears
+1. Drag `firmware.uf2` onto the drive
+1. Board reboots automatically — done
 
 Or via PlatformIO:
 
@@ -107,7 +117,7 @@ Or via PlatformIO:
 source .venv/bin/activate && pio run -e feather_rp2040_can -t upload
 ```
 
-### Step 6: Tuck and reassemble
+### Step 7: Tuck and reassemble
 
 Place the board and DC/DC converter behind the footwell panel. Snap the trim panel back into place. No visible wires.
 
@@ -129,6 +139,7 @@ Place the board and DC/DC converter behind the footwell panel. Snap the trim pan
 - [ ] 12V+ (red) wired to MP1584EN IN+, GND (black) to IN−
 - [ ] MP1584EN OUT+/OUT− connected to Feather (via USB-C breakout or direct solder)
 - [ ] "Other Bus" pair left disconnected
+- [ ] Board wrapped in heat shrink tubing, wire exits sealed
 - [ ] Car fully powered off for 8–10 minutes before plugging in
 
 ## Firmware Configuration

@@ -161,7 +161,7 @@ Current `sketch_config.h` settings:
 
 ## Sources
 
-- [Tesla Open CAN Mod — GitLab Repository](https://gitlab.com/Tesla-OPEN-CAN-MOD/tesla-open-can-mod)
+- [[Tesla Open CAN Mod — GitLab Repository](https://gitlab.com/Tesla-OPEN-CAN-MOD/tesla-open-can-mod)](https://github.com/ev-open-can-tools/ev-open-can-tools)
 - [Tesla Open CAN Mod — Documentation Site](https://teslaopencanmod.org/)
 - [Enhance Auto — Gen 2 Cable](https://www.enhauto.com/products/tesla-gen-2-cable)
 - [Enhance Auto — X179 Installation Video](https://youtube.com/watch?v=ifwJNZgykVI)

@@ -25,3 +25,7 @@ Icon
 Network Trash Folder
 Temporary Items
 .apdisk
+
+# Upstream reference repos cloned per AGENTS.md pre-flight check
+ev-open-can-tools/
+ev-open-can-tools-plugins/

@@ -51,9 +51,27 @@ hardware:
 firmware:
   desired_behavior_source: "hypery11/flipper-tesla-fsd"
   selected_hardware_target: "Adafruit Feather RP2040 CAN"
-  feather_port_status: "pending; hypery11 does not currently ship a Feather RP2040 build"
+  feather_port_status: "planned as a logic-only port onto the existing ev-open-can-tools Feather RP2040/MCP2515 platform; hypery11 does not currently ship a Feather RP2040 build"
   artifact_after_port: "firmware.uf2"
   reference_repo: "flipper-tesla-fsd"
+  selected_implementation_strategy:
+    host_platform: "ev-open-can-tools feather_rp2040_can"
+    driver_framework: "reuse existing MCP2515 CanDriver and app loop"
+    logic_source: "port/adapt hypery11 CAN behavior into a CarManagerBase handler"
+    do_not_port_initially:
+      - "Flipper UI/application shell"
+      - "ESP32 WiFi dashboard"
+      - "ESP32 preferences/OTA infrastructure"
+    first_vehicle_build_scope:
+      - "true MCP2515 listen-only boot/sniff mode"
+      - "0x370 EPAS nag echo"
+      - "0x39B DAS-aware nag gate"
+      - "organic torque variation"
+      - "0x318 OTA-in-progress TX pause"
+    deferred_until_nag_only_proven:
+      - "0x3FD FSD region unlock"
+      - "0x7FF Ban Shield"
+      - "0x3F8 telemetry-disable code path"
   supported_hypery11_hardware_now:
     - "Flipper Zero + CAN add-on"
     - "ESP32 + CAN hardware"
@@ -106,7 +124,7 @@ goals:
     risk_posture: "May itself be a ban signal. Only evaluate deliberately offline with SIM removed and WiFi disabled."
 
 rollout:
-  - "Choose firmware path: supported ESP32 hypery11, Flipper hypery11, Feather hypery11 port, or stock Feather fallback."
+  - "Implement the selected Feather logic-only port on top of ev-open-can-tools feather_rp2040_can."
   - "Start listen-only and verify 500 kbit/s traffic on X179 pin 13/14 / Bus 6 mixed-forwarding target frames."
   - "Run Goal A nag suppression only for multiple weeks."
   - "If proceeding to Goal B, enable Ban Shield and capture healthy 0x7FF baseline before 0x3FD region unlock."

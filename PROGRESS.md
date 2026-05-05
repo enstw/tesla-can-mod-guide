@@ -12,7 +12,7 @@ Primary goals:
 
 **Vehicle firmware:** 2026.14.3 (observed 2026-05-05; previously 2026.2.9.3).
 
-**Current handoff:** 2026-05-05. Hypery11 behavior remains the target, but hypery11 currently supports Flipper Zero and ESP32 targets, not Feather RP2040. The selected Feather hardware requires a port before it can run hypery11 behavior.
+**Current handoff:** 2026-05-05. Hypery11 behavior remains the target, but hypery11 currently supports Flipper Zero and ESP32 targets, not Feather RP2040. The selected Feather hardware requires a port before it can run hypery11 behavior. Current plan is a logic-only port onto the existing `ev-open-can-tools` Feather RP2040/MCP2515 framework, not a port of the Flipper app or ESP32 dashboard.
 
 ## Done
 
@@ -30,14 +30,19 @@ Primary goals:
    1. Flipper Zero + Electronic Cats CAN Add-On is hypery11's reference/upstream path.
    1. ESP32 + CAN is supported by hypery11 now and is the best path for web UI, bus discovery, and a practical permanent install.
    1. Feather RP2040 CAN remains the selected physical hardware, but hypery11 behavior requires a Feather/RP2040 port.
+1. **Feather port architecture selected**:
+   1. Keep the existing `ev-open-can-tools` `feather_rp2040_can` PlatformIO environment and MCP2515 driver.
+   1. Add a hypery11-derived `CarManagerBase` handler instead of porting the Flipper app or ESP32 dashboard.
+   1. Start with a minimal nag-only build: `0x370` EPAS echo, `0x39B` DAS-aware gate, and `0x318` OTA TX pause.
+   1. Add true MCP2515 listen-only boot support before any vehicle connection or active TX test.
 
 ## In progress
 
-1. **Choose firmware path before vehicle TX**:
-   1. Use supported ESP32 hypery11 hardware now for discovery/install, or
-   1. use Flipper Zero + Electronic Cats CAN Add-On as the reference hypery11 path, or
-   1. port hypery11 behavior to Feather RP2040 and then flash a generated `firmware.uf2`, or
-   1. deliberately fall back to stock `ev-open-can-tools` Feather firmware with the understanding that it is not equivalent to hypery11.
+1. **Implement the Feather logic-only port before vehicle TX**:
+   1. Extend the existing Feather MCP2515 path with explicit listen-only/normal mode control.
+   1. Add a `CanFrame` adapter or native handler for the needed hypery11 logic.
+   1. Implement Goal A first: nag suppression only, with DAS-aware gating and organic torque variation.
+   1. Defer `0x3FD` region unlock, `0x7FF` Ban Shield, and `0x3F8` telemetry-disable code until nag-only operation is proven.
 
 ## Not started
 
@@ -69,3 +74,4 @@ Primary goals:
 - **X179 pin 13/14 / Bus 6 mixed forwarding is the target bus.** The restored image labels pin 13/14 as Chassis CAN and pin 9/10 as Body CAN; hypery11 labels 13/14 as Bus 6 mixed forwarding. Frame visibility is the deciding test, not the Body/Chassis name.
 - **Adapter approach over cable cut.** Keeps the Gen 2 cable resaleable; adapter color-to-X179-bus mapping still needs field verification (see Done item 5).
 - **Feather firmware path corrected.** Do not assume a hypery11 Feather `firmware.uf2` exists today. Hypery11 supports Flipper and ESP32 now; Feather requires a port or a deliberate stock-firmware fallback.
+- **Feather port should be logic-only.** The existing `ev-open-can-tools` app loop already feeds filtered `CanFrame` messages into a `CarManagerBase` handler on top of the Feather MCP2515 driver. The right port is to replace/upgrade the current simple `NagHandler` with hypery11-derived logic, not to bring over Flipper UI code, ESP32 WiFi/dashboard code, or preferences infrastructure.

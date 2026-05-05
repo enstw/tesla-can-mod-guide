@@ -1,6 +1,6 @@
 # Tesla Model 3 Highland — CAN Mod Guide
 
-> 2024 Model 3 Highland (HW4) · X179 pin 13/14 target bus · Feather RP2040 CAN hardware selected · hypery11 behavior target, Feather port pending
+> 2024 Model 3 Highland (HW4) · X179 pin 13/14 target bus · Feather RP2040 CAN hardware selected · hypery11 behavior target, logic-only Feather port planned
 
 ## Goals
 
@@ -131,11 +131,13 @@ Plug the cable's vehicle-side connector into the X179 port — it clicks into pl
 
 Current status: **hypery11 does not ship a Feather RP2040 build today**. It supports Flipper Zero and ESP32 targets. The selected Feather hardware can only run hypery11 behavior after a Feather/RP2040 port exists.
 
+Chosen implementation direction: **keep the existing `ev-open-can-tools` Feather RP2040 platform and MCP2515 driver, then port only the hypery11 CAN logic into a new Feather handler**. Do not port the Flipper app or ESP32 web dashboard for the first vehicle build.
+
 Valid paths:
 
 1. **Fastest hypery11 path:** use an ESP32-supported board (`m5stack-atom`, `esp32-lilygo`, `waveshare-s3-can`, or `esp32-mcp2515`) for bus discovery and/or install.
 1. **Reference hypery11 path:** use Flipper Zero + Electronic Cats CAN Bus Add-On.
-1. **Keep Feather hardware:** port hypery11 logic to Feather RP2040 and then flash the generated `firmware.uf2` by BOOTSEL drag-drop.
+1. **Chosen Feather path:** port hypery11 logic onto the existing `ev-open-can-tools` `feather_rp2040_can` framework, then flash the generated `firmware.uf2` by BOOTSEL drag-drop.
 1. **Fallback only:** flash stock `ev-open-can-tools` `feather_rp2040_can`, knowing it does not match the desired hypery11 feature behavior.
 
 ### Step 7: Tuck and reassemble
@@ -156,7 +158,7 @@ Place the board and DC/DC converter behind the footwell panel. Snap the trim pan
 - [ ] Adapter orientation verified with multimeter: red ≈ 12V, blue → GND
 - [ ] CAN pair grouping verified: green↔white ≈ 60Ω, yellow↔black ≈ 60Ω (car off 8–10 min)
 - [ ] TERM jumper cut on Feather RP2040 CAN board
-- [ ] Firmware path selected: ESP32 hypery11 now, Flipper hypery11 now, Feather hypery11 port, or stock Feather fallback
+- [ ] Firmware path selected: logic-only hypery11 Feather port on the existing `ev-open-can-tools` Feather framework
 - [ ] Target CAN pair verified by sniffing for `0x370`, `0x39B`, `0x3FD`, and ideally `0x7FF`
 - [ ] Red wired to MP1584EN IN+, Blue to IN−
 - [ ] MP1584EN OUT+/OUT− connected to Feather (via USB-C breakout or direct solder)
@@ -182,12 +184,13 @@ Current firmware status:
 |---|---|---|
 | Flipper Zero + Electronic Cats CAN Add-On | Supported by hypery11 now | Reference/upstream path |
 | ESP32 + CAN hardware | Supported by hypery11 now | Best for web UI, bus discovery, and practical install |
-| Feather RP2040 CAN | Port pending | Best physical fit only after hypery11 behavior is ported |
+| Feather RP2040 CAN | Chosen path: logic-only port pending | Best physical fit; keep existing MCP2515 driver/framework and add hypery11-derived handler logic |
 | Stock `ev-open-can-tools` Feather build | Builds UF2 now | Fallback only; not equivalent to hypery11 |
 
 Required runtime posture:
 
-- Boot or start in listen-only mode first.
+- Boot in true MCP2515 listen-only mode first; a no-send handler is not enough for first vehicle validation.
+- First active build should include only `0x370` nag suppression, `0x39B` DAS-aware gating, and `0x318` OTA TX pause.
 - Keep Telemetry Off disabled for normal use.
 - On 2026.14.x, use AP-First behavior before any `0x3FD` region-unlock injection.
 - If Ban Shield is used, let it learn a healthy `0x7FF` baseline before enabling region unlock.

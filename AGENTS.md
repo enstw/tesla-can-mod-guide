@@ -9,6 +9,7 @@ Important current state:
 - Selected physical install hardware is **Adafruit Feather RP2040 CAN (MCP2515)**.
 - Desired firmware behavior is **hypery11 CAN logic**.
 - hypery11 currently supports **Flipper Zero** and **ESP32** targets, not Feather RP2040. Do not assume a hypery11 Feather `firmware.uf2` exists.
+- Current implementation plan is a **logic-only Feather port**: reuse the existing `ev-open-can-tools` `feather_rp2040_can` framework and MCP2515 driver, then add hypery11-derived CAN handler logic. Do not port the Flipper app or ESP32 dashboard for the first vehicle build.
 - The target vehicle bus is **X179 pin 13/14 / Bus 6 mixed forwarding**. The restored image labels pin 13/14 as Chassis CAN; hypery11 labels it Bus 6 mixed forwarding. Verify by frame visibility, not by Body/Chassis naming alone.
 
 Project goals, in rollout order:
@@ -21,7 +22,7 @@ The workspace has four main components:
 
 1. **Root Directory (`/`)**: Hardware wiring, install guide, progress tracking, and risk decisions for the Model 3 Highland.
 2. **`flipper-tesla-fsd/`**: hypery11 reference firmware and research source for nag suppression, AP-First, Ban Shield, FSD region-unlock behavior, and telemetry-disable research.
-3. **`ev-open-can-tools/`**: Reference C++ firmware project for CAN handlers, tests, drivers, and plugin architecture. Useful for comparison, but not the default firmware target for this install plan.
+3. **`ev-open-can-tools/`**: C++ firmware project providing the selected Feather RP2040/MCP2515 host platform, app loop, drivers, handlers, tests, and plugin architecture. Stock `ev-open-can-tools` behavior is not the default install behavior; the plan is to add hypery11-derived logic on this platform.
 4. **`ev-open-can-tools-plugins/`**: Reference JSON plugins that define CAN frame modifications.
 
 **Core Technologies:**
@@ -33,7 +34,7 @@ The workspace has four main components:
 
 ## Building and Running
 
-The desired install target is hypery11 behavior on the chosen hardware. Current supported choices are Flipper Zero + CAN add-on or ESP32 + CAN hardware. Feather RP2040 requires a port before it can carry hypery11-derived behavior. If the work is about the actual vehicle install, do not silently switch to stock `ev-open-can-tools` firmware; first confirm that fallback with the user.
+The desired install target is hypery11 behavior on the chosen hardware. Current supported choices are Flipper Zero + CAN add-on or ESP32 + CAN hardware. Feather RP2040 requires a port before it can carry hypery11-derived behavior. The selected port strategy is to keep the `ev-open-can-tools` Feather RP2040/MCP2515 platform and add hypery11-derived `CarManagerBase` handler logic. If the work is about the actual vehicle install, do not silently switch to stock `ev-open-can-tools` firmware; first confirm that fallback with the user.
 
 The `ev-open-can-tools/` commands below are reference commands for that upstream project only.
 

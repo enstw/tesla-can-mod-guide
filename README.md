@@ -1,6 +1,6 @@
-# Tesla Model 3 Highland — Feather RP2040 CAN Mod Guide
+# Tesla Model 3 Highland — CAN Mod Guide
 
-> 2024 Model 3 Highland (HW4) · Adafruit Feather RP2040 CAN (MCP2515) · hypery11-derived firmware
+> 2024 Model 3 Highland (HW4) · X179 pin 13/14 target bus · Feather RP2040 CAN hardware selected · hypery11 behavior target, Feather port pending
 
 ## Goals
 
@@ -12,7 +12,7 @@ This repo is organized around three vehicle goals, in rollout order:
 
 Non-goal: Acceleration Boost is already paid and active on this VIN; no CAN unlock is needed for it.
 
-Canonical target configuration lives in [`install-target.yaml`](./install-target.yaml). Use it as the source of truth for vehicle, hardware, firmware, and build-flag semantics.
+Canonical target configuration lives in [`install-target.yaml`](./install-target.yaml). Use it as the source of truth for vehicle, hardware, firmware status, bus-selection assumptions, and build-flag semantics.
 
 ## Shopping List
 
@@ -21,7 +21,8 @@ Canonical target configuration lives in [`install-target.yaml`](./install-target
 | [Enhance Auto Gen 2 Cable](https://www.enhauto.com/products/tesla-gen-2-cable) | Select variant **"Model 3 Highland 2024+"** (€13.39). Plugs into X179 on the vehicle side. The other end has a proprietary S3XY Commander connector — left **intact** here, mated with a passive 6-pin breakout adapter (see Adapter Wiring below) so the cable stays reusable. |
 | 6-pin breakout adapter | Mates with the Commander-side connector and breaks out to colored pigtails (red, blue, green, white, yellow, black). Lets you tap CAN + power without cutting the Gen 2 cable. |
 | MP1584EN Fixed 5V 3A Buck Converter | Fixed 5V output, ~22×17mm. Input 4.5–28V, no adjustment needed. The RP2040 board runs on 5V and has no built-in 12V regulator (unlike the S3XY Commander which regulates 12V internally), so an external step-down converter is required. Wire OUT+/OUT− to a USB-C breakout board or directly to the Feather's USB/GND pads. |
-| [Adafruit Feather RP2040 CAN](https://www.adafruit.com/product/5724) | MCP2515 CAN controller. Has screw terminal for CAN-H / CAN-L. |
+| [Adafruit Feather RP2040 CAN](https://www.adafruit.com/product/5724) | Selected permanent-install hardware. MCP2515 CAN controller with screw terminal for CAN-H / CAN-L. Note: hypery11 does not currently ship a Feather RP2040 target; using this board for hypery11 behavior requires a port. |
+| Optional ESP32 discovery/firmware hardware | For immediate hypery11 ESP32 support and web UI, use M5Stack ATOM Lite + ATOMIC CAN Base, LILYGO T-CAN485, Waveshare ESP32-S3-RS485-CAN, or generic ESP32 + CAN per `flipper-tesla-fsd/esp32/README.md`. |
 | Heat shrink tubing (flat width ≥ 75mm) | Insulates and dust-proofs the board. Shrinks to fit ~50mm width. |
 
 ## Board Preparation
@@ -36,10 +37,10 @@ Canonical target configuration lives in [`install-target.yaml`](./install-target
 
 The Enhance Auto Gen 2 Cable has a **proprietary 6-pin connector** on the Commander end. Rather than cutting it (which makes the cable single-use and non-resaleable), this guide uses a passive **breakout adapter** that mates with that connector and exposes the same 6 pins as colored pigtails.
 
-The cable itself carries 6 lines on the Commander connector — 2 power + 2 CAN buses (Body + Chassis):
+The cable itself carries 6 lines on the Commander connector — 2 power + 2 CAN pairs:
 
 ![Enhance Auto Gen 2 cable pinout](images/pinout-labeled.png)
-*Commander-side connector — Pin 1: 12V+, Pin 2: GND, Pins 3–4: Body Bus pair, Pins 5–6: Other (Chassis) Bus pair*
+*Commander-side connector photo labels pins 3–4 as Body Bus and pins 5–6 as Other Bus. The restored X179 diagram labels X179 pin 13/14 as Chassis CAN, while hypery11 documents pin 13/14 as Bus 6 mixed forwarding. Treat color-to-bus mapping as unconfirmed until sniffed.*
 
 The breakout adapter mates face-to-face with this connector. Adapter pin order, **right to left** (rightmost mates with cable Pin 1):
 
@@ -47,12 +48,12 @@ The breakout adapter mates face-to-face with this connector. Adapter pin order, 
 |---|---|---|---|
 | **Red** | 1 | 12V+ | MP1584EN **IN+** |
 | **Blue** | 2 | GND | MP1584EN **IN−** |
-| **Green** | 3 | Body CAN (H or L)* | Board screw terminal **H** or **L** |
-| **White** | 4 | Body CAN (the other) | Board screw terminal **L** or **H** |
-| **Yellow** | 5 | Chassis CAN | Leave disconnected |
-| **Black** | 6 | Chassis CAN | Leave disconnected |
+| **Green** | 3 | Candidate CAN pair A (H or L)* | Test as target pair first only if it carries `0x370`, `0x39B`, `0x3FD`, and `0x7FF` |
+| **White** | 4 | Candidate CAN pair A (the other) | Test with green |
+| **Yellow** | 5 | Candidate CAN pair B (H or L)* | Test if pair A does not show target frames |
+| **Black** | 6 | Candidate CAN pair B (the other) | Test with yellow |
 
-\* H vs L within the green/white pair is not yet known. Verify on first power-up — the TERM jumper is cut, so swapping if traffic doesn't appear at 500 kbit/s is safe.
+\* H vs L within each pair is not yet known. Verify in listen-only/sniffer mode — the TERM jumper is cut, so swapping polarity if traffic does not appear at 500 kbit/s is safe.
 
 ### Verify before plugging into the car
 
@@ -60,6 +61,7 @@ Take 5 minutes with a multimeter before energizing anything:
 
 1. **Power orientation** (cable plugged into car, car awake): DC volts red→chassis ≈ **12V**; blue should show continuity to chassis. If red reads 0V instead, the adapter is reversed end-to-end and the wire-to-pin mapping above flips.
 1. **CAN pair grouping** (car off 8–10 min): resistance green↔white ≈ **60Ω**, yellow↔black ≈ **60Ω**. Confirms the two buses are paired as expected.
+1. **Target pair identification** (listen-only/sniffer): the target pair should show `0x370`, `0x39B`, `0x3FD`, and ideally `0x7FF`. For this project, frame visibility matters more than whether the pair is named Body or Chassis.
 
 ## X179 Connector (Vehicle Side)
 
@@ -76,6 +78,8 @@ The cable handles this for you, but for reference, the X179 connector pinout:
 | 13 | Chassis CAN-H |
 | 14 | Chassis CAN-L |
 | 20 | GND |
+
+For this project, the target bus is **X179 pin 13/14**. The restored diagram labels it Chassis CAN, while hypery11's current hardware docs call it **Bus 6 mixed forwarding** and recommend it because it carries the frames needed for nag suppression and FSD-region work. Do not treat pin 13/14 as pure Body CAN.
 
 ## Installation Steps
 
@@ -96,14 +100,14 @@ Video walkthrough: [Enhance Auto installation video](https://youtube.com/watch?v
 
 Connect the adapter's pigtails to the board and MP1584EN converter:
 
-1. **Green** (Body CAN) → board screw terminal **H** (try this polarity first; swap with white if no traffic)
-1. **White** (Body CAN) → board screw terminal **L**
+1. Connect the candidate pair believed to map to X179 pin 13/14 / Bus 6 mixed forwarding to the board screw terminal **H/L**.
+1. If no 500 kbit/s traffic or no target frames are visible, swap H/L polarity. If still wrong, move to the other candidate pair and repeat.
 1. **Red** (12V+) → MP1584EN **IN+**
 1. **Blue** (GND) → MP1584EN **IN−**
 1. MP1584EN **OUT+** → USB-C breakout **VBUS** (or Feather **USB** pad)
 1. MP1584EN **OUT−** → USB-C breakout **GND** (or Feather **GND** pad)
 1. USB-C breakout → Feather USB-C port (if using breakout board)
-1. Leave **Yellow** and **Black** (Chassis Bus) disconnected and insulated
+1. Leave the unused CAN pair disconnected and insulated
 
 > **Tip:** The easiest approach is to solder the MP1584EN output to a USB-C breakout board, then plug into the Feather with a short USB-C cable. Alternatively, solder directly to the Feather's **USB** and **GND** pads on the back of the board.
 
@@ -123,16 +127,16 @@ The Feather RP2040 CAN has exposed solder joints on the bottom side. Wrapping th
 
 Plug the cable's vehicle-side connector into the X179 port — it clicks into place. The board powers on automatically when the car wakes up.
 
-### Step 6: Flash the firmware
+### Step 6: Select and flash firmware
 
-If you haven't already flashed the firmware:
+Current status: **hypery11 does not ship a Feather RP2040 build today**. It supports Flipper Zero and ESP32 targets. The selected Feather hardware can only run hypery11 behavior after a Feather/RP2040 port exists.
 
-1. Hold **BOOTSEL** on the board while connecting to USB
-1. A drive named **RPI-RP2** appears
-1. Drag the hypery11-derived Feather RP2040 `firmware.uf2` onto the drive
-1. Board reboots automatically — done
+Valid paths:
 
-Do not flash the stock `ev-open-can-tools` Feather build unless deliberately falling back to its more limited feature set. The intended firmware target for this install is the hypery11 feature logic on the Feather RP2040 hardware.
+1. **Fastest hypery11 path:** use an ESP32-supported board (`m5stack-atom`, `esp32-lilygo`, `waveshare-s3-can`, or `esp32-mcp2515`) for bus discovery and/or install.
+1. **Reference hypery11 path:** use Flipper Zero + Electronic Cats CAN Bus Add-On.
+1. **Keep Feather hardware:** port hypery11 logic to Feather RP2040 and then flash the generated `firmware.uf2` by BOOTSEL drag-drop.
+1. **Fallback only:** flash stock `ev-open-can-tools` `feather_rp2040_can`, knowing it does not match the desired hypery11 feature behavior.
 
 ### Step 7: Tuck and reassemble
 
@@ -152,25 +156,34 @@ Place the board and DC/DC converter behind the footwell panel. Snap the trim pan
 - [ ] Adapter orientation verified with multimeter: red ≈ 12V, blue → GND
 - [ ] CAN pair grouping verified: green↔white ≈ 60Ω, yellow↔black ≈ 60Ω (car off 8–10 min)
 - [ ] TERM jumper cut on Feather RP2040 CAN board
-- [ ] Firmware flashed (`firmware.uf2`)
-- [ ] Green wired to board screw terminal H, White to L (swap if no traffic at 500 kbit/s)
+- [ ] Firmware path selected: ESP32 hypery11 now, Flipper hypery11 now, Feather hypery11 port, or stock Feather fallback
+- [ ] Target CAN pair verified by sniffing for `0x370`, `0x39B`, `0x3FD`, and ideally `0x7FF`
 - [ ] Red wired to MP1584EN IN+, Blue to IN−
 - [ ] MP1584EN OUT+/OUT− connected to Feather (via USB-C breakout or direct solder)
-- [ ] Yellow and Black (Chassis Bus) left disconnected and insulated
+- [ ] Unused CAN pair left disconnected and insulated
 - [ ] Board wrapped in heat shrink tubing, wire exits sealed
 - [ ] Car fully powered off for 8–10 minutes before plugging in
 
 ## Firmware Target
 
-Hardware target: **Adafruit Feather RP2040 CAN** with MCP2515, TERM jumper cut.
+Selected permanent-install hardware: **Adafruit Feather RP2040 CAN** with MCP2515, TERM jumper cut.
 
-Firmware target: **hypery11-derived Feather RP2040 firmware**. The build should produce `firmware.uf2` and carry the hypery11 logic for:
+Desired firmware behavior: **hypery11 CAN logic** for:
 
 | Goal | CAN surface | Default stance |
 |---|---|---|
 | Nag suppression | `0x370` EPAS echo, ideally gated by `0x39B` DAS hands-on state | First active feature after listen-only validation |
 | FSD region unlock | `0x3FD` HW4 bit 46 + bit 60 | Deferred until wiring, nag-only operation, and ban-defense behavior are proven |
 | Telemetry disable | `0x3F8` bit 43 | Disabled by default; research/evaluation only |
+
+Current firmware status:
+
+| Path | Status | Use |
+|---|---|---|
+| Flipper Zero + Electronic Cats CAN Add-On | Supported by hypery11 now | Reference/upstream path |
+| ESP32 + CAN hardware | Supported by hypery11 now | Best for web UI, bus discovery, and practical install |
+| Feather RP2040 CAN | Port pending | Best physical fit only after hypery11 behavior is ported |
+| Stock `ev-open-can-tools` Feather build | Builds UF2 now | Fallback only; not equivalent to hypery11 |
 
 Required runtime posture:
 

@@ -19,6 +19,7 @@ vehicle:
 
 hardware:
   board: "Adafruit Feather RP2040 CAN"
+  role: "selected permanent-install hardware; hypery11 behavior requires a Feather/RP2040 port"
   can_controller: "MCP2515"
   can_speed: "500 kbit/s"
   termination:
@@ -35,19 +36,35 @@ hardware:
   adapter_pigtails:
     red: "12V+ -> MP1584EN IN+"
     blue: "GND -> MP1584EN IN-"
-    green: "Candidate CAN pair A -> Feather H first attempt"
-    white: "Candidate CAN pair A -> Feather L first attempt"
-    yellow: "Candidate CAN pair B -> disconnected initially"
-    black: "Candidate CAN pair B -> disconnected initially"
+    green: "Candidate CAN pair A -> Feather H/L first attempt only after listen-only verification"
+    white: "Candidate CAN pair A -> Feather H/L first attempt only after listen-only verification"
+    yellow: "Candidate CAN pair B -> disconnected initially; test if pair A is not X179 13/14 target bus"
+    black: "Candidate CAN pair B -> disconnected initially; test if pair A is not X179 13/14 target bus"
+  target_bus:
+    x179_pins: "13/14"
+    restored_image_label: "Chassis CAN-H/L"
+    hypery11_label: "Bus 6 mixed forwarding"
+    decision: "Use the pair that exposes 0x370, 0x39B, 0x3FD, and ideally 0x7FF; do not require a pure Body/Chassis label."
   unresolved:
-    body_vs_chassis_pair: "pinout-labeled.png says green/white body; x170-enhanced.png suggests yellow/black may be body. Field-test both pairs and H/L polarity if no traffic."
+    adapter_color_to_x179_pair: "pinout-labeled.png says green/white body and yellow/black other; restored x170-enhanced.png labels X179 pin 13/14 as chassis. Field-test both pairs and H/L polarity in listen-only mode."
 
 firmware:
-  intended_target: "hypery11-derived Feather RP2040 firmware"
-  artifact: "firmware.uf2"
+  desired_behavior_source: "hypery11/flipper-tesla-fsd"
+  selected_hardware_target: "Adafruit Feather RP2040 CAN"
+  feather_port_status: "pending; hypery11 does not currently ship a Feather RP2040 build"
+  artifact_after_port: "firmware.uf2"
   reference_repo: "flipper-tesla-fsd"
+  supported_hypery11_hardware_now:
+    - "Flipper Zero + CAN add-on"
+    - "ESP32 + CAN hardware"
+  supported_hypery11_esp32_envs:
+    - "m5stack-atom"
+    - "m5stack-atom-swap-pins"
+    - "esp32-mcp2515"
+    - "esp32-lilygo"
+    - "waveshare-s3-can"
   fallback_not_default: "stock ev-open-can-tools feather_rp2040_can"
-  warning: "Do not silently switch to stock ev-open-can-tools firmware; it does not match the desired hypery11 feature behavior."
+  warning: "Do not assume a hypery11 Feather firmware.uf2 exists. Either use supported ESP32/Flipper hardware now, port hypery11 behavior to Feather, or deliberately accept stock ev-open-can-tools as a limited fallback."
   required_runtime_defaults:
     listen_only_on_first_boot: true
     telemetry_off_enabled: false
@@ -66,7 +83,7 @@ firmware:
     enable_fsd_region_unlock: true
     enable_telemetry_disable_code: true
     telemetry_disable_default_on: false
-  compile_time_note: "Exact macro names depend on the Feather RP2040 port. Preserve these semantics when mapping to actual build flags."
+  compile_time_note: "Exact macro names for Feather do not exist yet because the hypery11 Feather port is pending. Preserve these semantics when creating a port or mapping to an existing ESP32/Flipper target."
 
 goals:
   a_nag_suppression:
@@ -89,8 +106,8 @@ goals:
     risk_posture: "May itself be a ban signal. Only evaluate deliberately offline with SIM removed and WiFi disabled."
 
 rollout:
-  - "Flash hypery11-derived Feather RP2040 firmware.uf2."
-  - "Start listen-only and verify 500 kbit/s traffic."
+  - "Choose firmware path: supported ESP32 hypery11, Flipper hypery11, Feather hypery11 port, or stock Feather fallback."
+  - "Start listen-only and verify 500 kbit/s traffic on X179 pin 13/14 / Bus 6 mixed-forwarding target frames."
   - "Run Goal A nag suppression only for multiple weeks."
   - "If proceeding to Goal B, enable Ban Shield and capture healthy 0x7FF baseline before 0x3FD region unlock."
   - "Keep Goal C telemetry disable off unless doing an explicit offline experiment."

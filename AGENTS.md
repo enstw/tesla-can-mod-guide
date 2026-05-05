@@ -2,7 +2,14 @@
 
 ## Project Overview
 
-This workspace is a goal-oriented install and research guide for a 2024 Model 3 Highland HW4 using an Adafruit Feather RP2040 CAN (MCP2515). The canonical target configuration is [`install-target.yaml`](./install-target.yaml); read it before changing firmware, build flags, wiring assumptions, or rollout docs. The intended firmware behavior is hypery11-derived CAN logic on the Feather hardware, not the stock `ev-open-can-tools` Feather feature set unless explicitly stated.
+This workspace is a goal-oriented install and research guide for a 2024 Model 3 Highland HW4 using X179 CAN access. The canonical target configuration is [`install-target.yaml`](./install-target.yaml); read it before changing firmware, build flags, wiring assumptions, or rollout docs.
+
+Important current state:
+
+- Selected physical install hardware is **Adafruit Feather RP2040 CAN (MCP2515)**.
+- Desired firmware behavior is **hypery11 CAN logic**.
+- hypery11 currently supports **Flipper Zero** and **ESP32** targets, not Feather RP2040. Do not assume a hypery11 Feather `firmware.uf2` exists.
+- The target vehicle bus is **X179 pin 13/14 / Bus 6 mixed forwarding**. The restored image labels pin 13/14 as Chassis CAN; hypery11 labels it Bus 6 mixed forwarding. Verify by frame visibility, not by Body/Chassis naming alone.
 
 Project goals, in rollout order:
 
@@ -26,7 +33,7 @@ The workspace has four main components:
 
 ## Building and Running
 
-The install target is a Feather RP2040 `firmware.uf2` carrying hypery11-derived behavior. If the work is about the actual vehicle install, do not silently switch back to stock `ev-open-can-tools` firmware; first confirm that fallback with the user.
+The desired install target is hypery11 behavior on the chosen hardware. Current supported choices are Flipper Zero + CAN add-on or ESP32 + CAN hardware. Feather RP2040 requires a port before it can carry hypery11-derived behavior. If the work is about the actual vehicle install, do not silently switch to stock `ev-open-can-tools` firmware; first confirm that fallback with the user.
 
 The `ev-open-can-tools/` commands below are reference commands for that upstream project only.
 
@@ -62,15 +69,15 @@ The `ev-open-can-tools/` commands below are reference commands for that upstream
 *   **Configuration**: Target build environments are defined in `platformio.ini`. Custom configuration and board preferences are managed via scripts and a local profile system.
 *   **Versioning**: The project uses Semantic Versioning. The current version is tracked in the `ev-open-can-tools/VERSION` file.
 *   **Changelog**: Changes should be documented in `ev-open-can-tools/CHANGELOG.md`. Ongoing work must be added to the `Unreleased` section before merging.
-*   **Plugin Architecture**: Features are dynamically injected into the CAN stream via JSON-based plugins, which keeps the core C++ logic abstracted from specific vehicle hacks.
+*   **Plugin Architecture**: `ev-open-can-tools` features can be dynamically injected into the CAN stream via JSON-based plugins, but the current plugin schema is not yet enough for hypery11-quality nag suppression because DAS-aware gating and organic torque variation need stateful behavior.
 *   **Safety Warning**: The codebase modifies safety-critical vehicle networks. Testing must be rigorous.
 
 ## Key Directories & Files
 
 *   **`README.md` (root)**: The primary goal-oriented hardware wiring and installation guide for the Model 3 Highland.
 *   **`PROGRESS.md` (root)**: Current physical install state, firmware target, staged rollout plan, and risk decisions.
-*   **`install-target.yaml` (root)**: Canonical vehicle, hardware, firmware, build-semantics, and rollout configuration for future agents.
-*   **`flipper-tesla-fsd/`**: hypery11 reference for the target behavior.
+*   **`install-target.yaml` (root)**: Canonical vehicle, hardware, firmware status, target-bus decision, build-semantics, and rollout configuration for future agents.
+*   **`flipper-tesla-fsd/`**: hypery11 reference for the target behavior; use it to verify current hardware support before writing install instructions.
 *   **`ev-open-can-tools/platformio.ini`**: The master build configuration file containing all supported boards and native testing environments.
 *   **`ev-open-can-tools/src/` & `ev-open-can-tools/include/`**: The C++ source code and headers for the firmware, drivers, and web dashboard.
 *   **`ev-open-can-tools/test/`**: Contains Python and C++ native tests.

@@ -2,6 +2,8 @@
 
 Status of the Model 3 Highland CAN mod build. See [README.md](./README.md) for the full guide.
 
+**Vehicle firmware:** 2026.14.3 (observed 2026-05-05; previously 2026.2.9.3).
+
 ## Done
 
 1. **Tesla Gen 2 cable (Enhance Auto)** — acquired.
@@ -25,3 +27,22 @@ Status of the Model 3 Highland CAN mod build. See [README.md](./README.md) for t
 1. Plug into X179 (passenger footwell, right panel) with the car powered off for 8–10 minutes.
 1. Confirm CAN traffic on the Feather; swap green/white at the Feather screw terminal if no 500 kbit/s traffic.
 1. Tuck behind the trim panel and reassemble.
+
+## Vehicle situation & feature plan
+
+- **Vehicle:** 2024 Model 3 Highland HW4, firmware 2026.14.3.
+- **FSD entitlement:** **paid permanent subscription**, currently region-locked (Taiwan). UI/region gate is the blocker, not entitlement — so `0x3FD` bit injection (HW4: bit 46 + bit 60) is the relevant unlock path.
+- **Risk context:** Tesla's April 2026 ban wave specifically targeted region-unlock users in EU/UK/CN/JP/KR. Taiwan is in the same detection cluster. A VIN ban on a paid permanent FSD is a much larger loss than for monthly subscribers — strongly favours stealth-first rollout.
+
+### Layered rollout plan (post-cabling, post-firmware-flash)
+
+1. **Listen-only first** — verify wiring and 500 kbit/s body-bus traffic without ever transmitting (MCP2515 hardware listen-only register).
+1. **Nag suppression only** — `0x370` EPAS counter+1 echo, gated by `0x39B` `DAS_autopilotHandsOnState` (states 2–7, 9–10), with organic torque variation (xorshift32 random walk 1.00–2.40 Nm + grip pulses 3.10–3.30 Nm every 5–9 s). Drive on this for at least a few weeks to confirm no server reaction.
+1. **Add Ban Shield** — `0x7FF` healthy snapshot retransmit. Must be enabled *before* `0x3FD` region unlock so it captures pre-modification baseline of `GTW_carConfig`.
+1. **Add region unlock** — `0x3FD` bit 46 + bit 60.
+1. **Hold TLSSC Restore (`0x331` byte[0]=0x1B) in reserve** — only deploy if Tesla VIN-bans us and removes TLSSC.
+
+### Decisions (with reasoning)
+
+- **Telemetry Off (`0x3F8` bit 43): not enabled.** Researched 2026-05-05. Once flipped, the bit-flip event likely persists on MCU/Gateway flash for the life of the vehicle (per IEEE Spectrum / forensic-research consensus on Tesla gateway log retention). Provides damage-limitation if connectivity ever returns, but does not enable safe reconnection — and our threat model (paid permanent FSD on Highland that will need OTAs and may need service visits) makes "permanent SIM-out, no WiFi, no service, no OTA" infeasible. Organic torque variation is the cheaper mitigation.
+- **Adapter approach over cable cut.** Keeps the Gen 2 cable resaleable; pinout body/chassis still TBD by field test (see Done item 5).

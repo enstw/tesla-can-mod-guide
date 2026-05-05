@@ -29,3 +29,4 @@ Temporary Items
 # Upstream reference repos cloned per AGENTS.md pre-flight check
 ev-open-can-tools/
 ev-open-can-tools-plugins/
+flipper-tesla-fsd/

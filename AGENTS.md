@@ -44,9 +44,10 @@ The core firmware code is located in the `ev-open-can-tools/` directory. All bui
 
 ## Development Conventions
 
-*   **Pre-flight Check**: Before starting any work, verify that both the `ev-open-can-tools` and `ev-open-can-tools-plugins` repositories are cloned and their latest changes are pulled. If they are not cloned, clone them from their respective origins:
+*   **Pre-flight Check**: Before starting any work, verify that the following reference repositories are cloned (as siblings of this guide repo, all gitignored) and their latest changes are pulled. If a repo is not cloned, clone it from its origin:
     *   `git clone https://github.com/ev-open-can-tools/ev-open-can-tools.git`
     *   `git clone https://github.com/ev-open-can-tools/ev-open-can-tools-plugins.git`
+    *   `git clone https://github.com/hypery11/flipper-tesla-fsd.git` — Flipper Zero / ESP32 fork; contains `enhauto-re/` reverse-engineering notes on the Enhance Auto cable that are useful for Commander connector pinout questions.
 *   **Configuration**: Target build environments are defined in `platformio.ini`. Custom configuration and board preferences are managed via scripts and a local profile system.
 *   **Versioning**: The project uses Semantic Versioning. The current version is tracked in the `ev-open-can-tools/VERSION` file.
 *   **Changelog**: Changes should be documented in `ev-open-can-tools/CHANGELOG.md`. Ongoing work must be added to the `Unreleased` section before merging.

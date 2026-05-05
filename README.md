@@ -136,7 +136,7 @@ Place the board and DC/DC converter behind the footwell panel. Snap the trim pan
 
 > **Car must be off during wiring:** Turn the car off and wait 8–10 minutes for all CAN buses and relays to shut down before plugging/unplugging connectors.
 
-> **FSD on HW4 + firmware 2026.2.9.x:** FSD activation is currently **not working** on this firmware version. Nag suppression (bit 19 on CAN ID 1021 mux 1) works independently and is unaffected.
+> **FSD on HW4 + firmware 2026.2.9.x – 2026.14.x:** CAN-injection cannot *grant* FSD entitlement on these firmware versions — the AP ECU verifies VIN-level entitlement against Tesla servers independently of CAN. For VINs that **already** have a paid FSD entitlement but are region-locked (e.g. Taiwan), `0x3FD` bit injection can still unlock the regional UI gate — at the risk of triggering a server-side VIN ban (the April 2026 ban wave specifically targeted these region-unlock users; ban persists across account transfers and re-subscriptions). Nag suppression works on all observed firmware and is unaffected.
 
 ## Pre-Install Checklist
 
@@ -171,11 +171,13 @@ Current `sketch_config.h` settings:
 
 ## Sources
 
+- [FSD CAN Mod — Active Repos Tracker](https://fsdcanmod.com/#active-repos)
 - [EV Open Can Mod](https://github.com/ev-open-can-tools/ev-open-can-tools)
+- [hypery11 Flipper Zero CAN Mod](https://fsdcanmod.com/repos/hypery11-flipper-zero/)
 - [Enhance Auto — Gen 2 Cable](https://www.enhauto.com/products/tesla-gen-2-cable)
 - [Enhance Auto — X179 Installation Video](https://youtube.com/watch?v=ifwJNZgykVI)
 - [Adafruit — Feather RP2040 CAN Documentation](https://learn.adafruit.com/adafruit-rp2040-can-bus-feather)
 - [Tesla — Model 3 Electrical Reference](https://service.tesla.com/docs/Model3/ElectricalReference/)
 
 ---
-*Generated for Jay's 2024 Model 3 Highland (HW4) · Firmware 2026.2.9.3 · April 2026*
+*Generated for Jay's 2024 Model 3 Highland (HW4) · Firmware 2026.14.3 (observed 2026-05) · April 2026*

@@ -1,6 +1,18 @@
-# Tesla Model 3 Highland — RP2040 CAN Wiring Guide
+# Tesla Model 3 Highland — Feather RP2040 CAN Mod Guide
 
-> 2024 Model 3 Highland (HW4) · Adafruit Feather RP2040 CAN (MCP2515) · Nag Suppression
+> 2024 Model 3 Highland (HW4) · Adafruit Feather RP2040 CAN (MCP2515) · hypery11-derived firmware
+
+## Goals
+
+This repo is organized around three vehicle goals, in rollout order:
+
+1. **Nag suppression** — first active feature after listen-only validation. Target is `0x370` EPAS counter+1 echo, gated by `0x39B` DAS hands-on state where available, with organic torque variation. Lower detection risk than entitlement/config changes, but still an active CAN modification.
+1. **FSD region unlock** — for this VIN's paid permanent FSD entitlement that is region-locked in Taiwan. Target is `0x3FD` bit 46 + bit 60 on HW4, only after the hardware is proven stable and ban-defense behavior is understood.
+1. **Telemetry disable evaluation** — research goal, not a default active feature. Candidate target is `0x3F8` bit 43 (`UI_enableTripTelemetry=0`), but current decision is to keep it disabled unless intentionally testing offline with SIM removed and WiFi disabled.
+
+Non-goal: Acceleration Boost is already paid and active on this VIN; no CAN unlock is needed for it.
+
+Canonical target configuration lives in [`install-target.yaml`](./install-target.yaml). Use it as the source of truth for vehicle, hardware, firmware, and build-flag semantics.
 
 ## Shopping List
 
@@ -117,14 +129,10 @@ If you haven't already flashed the firmware:
 
 1. Hold **BOOTSEL** on the board while connecting to USB
 1. A drive named **RPI-RP2** appears
-1. Drag `firmware.uf2` onto the drive
+1. Drag the hypery11-derived Feather RP2040 `firmware.uf2` onto the drive
 1. Board reboots automatically — done
 
-Or via PlatformIO:
-
-```bash
-source .venv/bin/activate && pio run -e feather_rp2040_can -t upload
-```
+Do not flash the stock `ev-open-can-tools` Feather build unless deliberately falling back to its more limited feature set. The intended firmware target for this install is the hypery11 feature logic on the Feather RP2040 hardware.
 
 ### Step 7: Tuck and reassemble
 
@@ -136,7 +144,7 @@ Place the board and DC/DC converter behind the footwell panel. Snap the trim pan
 
 > **Car must be off during wiring:** Turn the car off and wait 8–10 minutes for all CAN buses and relays to shut down before plugging/unplugging connectors.
 
-> **FSD on HW4 + firmware 2026.2.9.x – 2026.14.x:** CAN-injection cannot *grant* FSD entitlement on these firmware versions — the AP ECU verifies VIN-level entitlement against Tesla servers independently of CAN. For VINs that **already** have a paid FSD entitlement but are region-locked (e.g. Taiwan), `0x3FD` bit injection can still unlock the regional UI gate — at the risk of triggering a server-side VIN ban (the April 2026 ban wave specifically targeted these region-unlock users; ban persists across account transfers and re-subscriptions). Nag suppression works on all observed firmware and is unaffected.
+> **FSD on HW4 + firmware 2026.2.9.x – 2026.14.x:** CAN-injection cannot *grant* FSD entitlement on these firmware versions — the AP ECU verifies VIN-level entitlement against Tesla servers independently of CAN. For VINs that **already** have a paid FSD entitlement but are region-locked (e.g. Taiwan), `0x3FD` bit injection can still unlock the regional UI gate — at the risk of triggering a server-side VIN ban (the April 2026 ban wave specifically targeted these region-unlock users; ban persists across account transfers and re-subscriptions). Nag suppression is mechanically separate from this entitlement/region gate, but it is still an active CAN modification with nonzero detection and safety risk.
 
 ## Pre-Install Checklist
 
@@ -152,22 +160,24 @@ Place the board and DC/DC converter behind the footwell panel. Snap the trim pan
 - [ ] Board wrapped in heat shrink tubing, wire exits sealed
 - [ ] Car fully powered off for 8–10 minutes before plugging in
 
-## Firmware Configuration
+## Firmware Target
 
-Current `sketch_config.h` settings:
+Hardware target: **Adafruit Feather RP2040 CAN** with MCP2515, TERM jumper cut.
 
-```cpp
-#define DRIVER_MCP2515   // Adafruit Feather RP2040 CAN
-#define HW4              // 2024 Model 3 Highland
+Firmware target: **hypery11-derived Feather RP2040 firmware**. The build should produce `firmware.uf2` and carry the hypery11 logic for:
 
-// Optional features (uncomment to enable):
-// #define ISA_SPEED_CHIME_SUPPRESS
-// #define EMERGENCY_VEHICLE_DETECTION
-// #define FORCE_FSD
-```
+| Goal | CAN surface | Default stance |
+|---|---|---|
+| Nag suppression | `0x370` EPAS echo, ideally gated by `0x39B` DAS hands-on state | First active feature after listen-only validation |
+| FSD region unlock | `0x3FD` HW4 bit 46 + bit 60 | Deferred until wiring, nag-only operation, and ban-defense behavior are proven |
+| Telemetry disable | `0x3F8` bit 43 | Disabled by default; research/evaluation only |
 
-**Active features:** Nag suppression (always on), Summon enable (always on)
-**Optional:** ISA speed chime suppress, emergency vehicle detection
+Required runtime posture:
+
+- Boot or start in listen-only mode first.
+- Keep Telemetry Off disabled for normal use.
+- On 2026.14.x, use AP-First behavior before any `0x3FD` region-unlock injection.
+- If Ban Shield is used, let it learn a healthy `0x7FF` baseline before enabling region unlock.
 
 ## Sources
 

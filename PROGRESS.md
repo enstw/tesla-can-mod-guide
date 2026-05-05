@@ -2,6 +2,14 @@
 
 Status of the Model 3 Highland CAN mod build. See [README.md](./README.md) for the full guide.
 
+Canonical target configuration: [install-target.yaml](./install-target.yaml).
+
+Primary goals:
+
+1. **Nag suppression** — first active feature after listen-only bring-up.
+1. **FSD region unlock** — unlock the regional UI gate for this VIN's paid FSD entitlement.
+1. **Telemetry disable evaluation** — research only for now; default decision remains disabled.
+
 **Vehicle firmware:** 2026.14.3 (observed 2026-05-05; previously 2026.2.9.3).
 
 ## Done
@@ -19,7 +27,7 @@ Status of the Model 3 Highland CAN mod build. See [README.md](./README.md) for t
 
 ## In progress
 
-1. **Flash `firmware.uf2`** to the Feather (BOOTSEL → drag-drop, or `pio run -e feather_rp2040_can -t upload`).
+1. **Flash hypery11-derived `firmware.uf2`** to the Feather (BOOTSEL → drag-drop).
 
 ## Not started
 
@@ -39,12 +47,13 @@ Status of the Model 3 Highland CAN mod build. See [README.md](./README.md) for t
 ### Layered rollout plan (post-cabling, post-firmware-flash)
 
 1. **Listen-only first** — verify wiring and 500 kbit/s body-bus traffic without ever transmitting (MCP2515 hardware listen-only register).
-1. **Nag suppression only** — `0x370` EPAS counter+1 echo, gated by `0x39B` `DAS_autopilotHandsOnState` (states 2–7, 9–10), with organic torque variation (xorshift32 random walk 1.00–2.40 Nm + grip pulses 3.10–3.30 Nm every 5–9 s). Drive on this for at least a few weeks to confirm no server reaction.
+1. **Goal A: nag suppression only** — `0x370` EPAS counter+1 echo, gated by `0x39B` `DAS_autopilotHandsOnState` (states 2–7, 9–10), with organic torque variation (xorshift32 random walk 1.00–2.40 Nm + grip pulses 3.10–3.30 Nm every 5–9 s). Drive on this for at least a few weeks to confirm no server reaction.
 1. **Add Ban Shield** — `0x7FF` healthy snapshot retransmit. Must be enabled *before* `0x3FD` region unlock so it captures pre-modification baseline of `GTW_carConfig`.
-1. **Add region unlock** — `0x3FD` bit 46 + bit 60.
+1. **Goal B: add region unlock** — `0x3FD` bit 46 + bit 60.
+1. **Goal C: evaluate telemetry disable only if deliberately testing offline** — candidate `0x3F8` bit 43 (`UI_enableTripTelemetry=0`), with SIM removed and WiFi disabled. Keep off for normal use.
 1. **Hold TLSSC Restore (`0x331` byte[0]=0x1B) in reserve** — only deploy if Tesla VIN-bans us and removes TLSSC.
 
 ### Decisions (with reasoning)
 
-- **Telemetry Off (`0x3F8` bit 43): not enabled.** Researched 2026-05-05. Once flipped, the bit-flip event likely persists on MCU/Gateway flash for the life of the vehicle (per IEEE Spectrum / forensic-research consensus on Tesla gateway log retention). Provides damage-limitation if connectivity ever returns, but does not enable safe reconnection — and our threat model (paid permanent FSD on Highland that will need OTAs and may need service visits) makes "permanent SIM-out, no WiFi, no service, no OTA" infeasible. Organic torque variation is the cheaper mitigation.
+- **Telemetry Off (`0x3F8` bit 43): not enabled by default.** Researched 2026-05-05. hypery11 labels this beta and warns it may itself be a ban signal. Tesla documentation confirms vehicle data can be stored locally and later accessed or transmitted; disabling one UI trip-telemetry flag should not be treated as a reliable privacy or anti-ban boundary. For this paid permanent FSD VIN, normal use still needs OTAs, service, and connectivity, so Telemetry Off remains an offline-only experiment, not part of the staged active rollout.
 - **Adapter approach over cable cut.** Keeps the Gen 2 cable resaleable; pinout body/chassis still TBD by field test (see Done item 5).

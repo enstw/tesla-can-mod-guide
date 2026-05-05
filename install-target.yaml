@@ -1,0 +1,96 @@
+# Canonical install target for this repo.
+# Future agents should read this before changing firmware, build flags, or rollout docs.
+
+vehicle:
+  model: "2024 Tesla Model 3 Highland"
+  hardware_generation: "HW4"
+  trim: "Long Range AWD"
+  region: "Taiwan"
+  firmware:
+    observed_current: "2026.14.3"
+    observed_date: "2026-05-05"
+    previous: "2026.2.9.3"
+  paid_entitlements:
+    fsd_permanent: true
+    acceleration_boost: true
+  entitlement_notes:
+    fsd: "Paid permanent FSD entitlement exists, but FSD is region-locked in Taiwan."
+    acceleration_boost: "Already active in vehicle software; do not treat as a CAN unlock goal."
+
+hardware:
+  board: "Adafruit Feather RP2040 CAN"
+  can_controller: "MCP2515"
+  can_speed: "500 kbit/s"
+  termination:
+    onboard_term_jumper_cut: true
+    measured_h_l_resistance_unpowered: "~32 kOhm across Feather screw terminals after TERM cut"
+  power:
+    source: "X179 / Enhance Auto Gen 2 cable 12V"
+    regulator: "MP1584EN fixed 5V 3A buck converter"
+    output_to_board: "5V to Feather USB/GND via USB-C breakout or direct solder"
+  cable:
+    product: "Enhance Auto Gen 2 Cable"
+    variant: "Model 3 Highland 2024+"
+    approach: "Passive 6-pin Commander-side breakout adapter; cable left intact"
+  adapter_pigtails:
+    red: "12V+ -> MP1584EN IN+"
+    blue: "GND -> MP1584EN IN-"
+    green: "Candidate CAN pair A -> Feather H first attempt"
+    white: "Candidate CAN pair A -> Feather L first attempt"
+    yellow: "Candidate CAN pair B -> disconnected initially"
+    black: "Candidate CAN pair B -> disconnected initially"
+  unresolved:
+    body_vs_chassis_pair: "pinout-labeled.png says green/white body; x170-enhanced.png suggests yellow/black may be body. Field-test both pairs and H/L polarity if no traffic."
+
+firmware:
+  intended_target: "hypery11-derived Feather RP2040 firmware"
+  artifact: "firmware.uf2"
+  reference_repo: "flipper-tesla-fsd"
+  fallback_not_default: "stock ev-open-can-tools feather_rp2040_can"
+  warning: "Do not silently switch to stock ev-open-can-tools firmware; it does not match the desired hypery11 feature behavior."
+  required_runtime_defaults:
+    listen_only_on_first_boot: true
+    telemetry_off_enabled: false
+    ap_first_for_2026_14: true
+    ban_shield_before_region_unlock: true
+  compile_time_semantics:
+    board: "FEATHER_RP2040_CAN"
+    can_driver: "MCP2515"
+    vehicle_profile: "HW4"
+    enable_listen_only_mode: true
+    enable_nag_killer: true
+    enable_das_aware_nag_gate: true
+    enable_organic_torque_variation: true
+    enable_ap_first: true
+    enable_ban_shield: true
+    enable_fsd_region_unlock: true
+    enable_telemetry_disable_code: true
+    telemetry_disable_default_on: false
+  compile_time_note: "Exact macro names depend on the Feather RP2040 port. Preserve these semantics when mapping to actual build flags."
+
+goals:
+  a_nag_suppression:
+    status: "first active goal after listen-only validation"
+    can_surface:
+      - "0x370 EPAS3P_sysStatus counter+1 echo"
+      - "0x39B DAS_status hands-on gate when available"
+    risk_posture: "Lower detection risk than entitlement/config changes, but nonzero safety and detection risk."
+  b_fsd_region_unlock:
+    status: "deferred until hardware and nag-only operation are proven"
+    can_surface:
+      - "0x3FD UI_autopilotControl HW4 bit 46"
+      - "0x3FD UI_autopilotControl HW4 bit 60"
+      - "0x7FF GTW_carConfig Ban Shield baseline before unlock"
+    risk_posture: "High ban risk; only relevant because this VIN already has paid permanent FSD entitlement."
+  c_telemetry_disable:
+    status: "research only; default off"
+    can_surface:
+      - "0x3F8 UI_driverAssistControl bit 43"
+    risk_posture: "May itself be a ban signal. Only evaluate deliberately offline with SIM removed and WiFi disabled."
+
+rollout:
+  - "Flash hypery11-derived Feather RP2040 firmware.uf2."
+  - "Start listen-only and verify 500 kbit/s traffic."
+  - "Run Goal A nag suppression only for multiple weeks."
+  - "If proceeding to Goal B, enable Ban Shield and capture healthy 0x7FF baseline before 0x3FD region unlock."
+  - "Keep Goal C telemetry disable off unless doing an explicit offline experiment."

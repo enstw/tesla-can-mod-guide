@@ -30,8 +30,10 @@ Status of the Model 3 Highland CAN mod build. See [README.md](./README.md) for t
 
 ## Vehicle situation & feature plan
 
-- **Vehicle:** 2024 Model 3 Highland HW4, firmware 2026.14.3.
-- **FSD entitlement:** **paid permanent subscription**, currently region-locked (Taiwan). UI/region gate is the blocker, not entitlement — so `0x3FD` bit injection (HW4: bit 46 + bit 60) is the relevant unlock path.
+- **Vehicle:** 2024 Model 3 Highland HW4 (Long Range AWD), firmware 2026.14.3.
+- **Paid entitlements on this VIN:**
+  1. **FSD** — paid permanent purchase, currently region-locked (Taiwan). UI/region gate is the blocker, not entitlement — so `0x3FD` bit injection (HW4: bit 46 + bit 60) is the relevant unlock path.
+  1. **Acceleration Boost** — Long Range AWD upgraded to 0–100 km/h <4 s. Already active in software; no CAN mod needed. Listed for completeness so future feature work doesn't accidentally try to "unlock" something already on.
 - **Risk context:** Tesla's April 2026 ban wave specifically targeted region-unlock users in EU/UK/CN/JP/KR. Taiwan is in the same detection cluster. A VIN ban on a paid permanent FSD is a much larger loss than for monthly subscribers — strongly favours stealth-first rollout.
 
 ### Layered rollout plan (post-cabling, post-firmware-flash)

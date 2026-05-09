@@ -12,7 +12,7 @@ Primary goals:
 
 **Vehicle firmware:** 2026.14.3 (observed 2026-05-05; previously 2026.2.9.3).
 
-**Current handoff:** 2026-05-05. Hypery11 behavior remains the target, but hypery11 currently supports Flipper Zero and ESP32 targets, not Feather RP2040. The selected Feather hardware requires a port before it can run hypery11 behavior. Current plan is a logic-only port onto the existing `ev-open-can-tools` Feather RP2040/MCP2515 framework, not a port of the Flipper app or ESP32 dashboard.
+**Current handoff:** 2026-05-10. Hypery11 behavior remains the target, but hypery11 currently supports Flipper Zero and ESP32 targets, not Feather RP2040. The selected Feather hardware requires a logic-only port onto the existing `ev-open-can-tools` Feather RP2040/MCP2515 framework, not a port of the Flipper app or ESP32 dashboard. Resume firmware implementation from [`FEATHER_HYPERY11_PORT_PLAN.md`](./FEATHER_HYPERY11_PORT_PLAN.md).
 
 ## Done
 
@@ -35,11 +35,16 @@ Primary goals:
    1. Add a hypery11-derived `CarManagerBase` handler instead of porting the Flipper app or ESP32 dashboard.
    1. Start with a minimal nag-only build: `0x370` EPAS echo, `0x39B` DAS-aware gate, and `0x318` OTA TX pause.
    1. Add true MCP2515 listen-only boot support before any vehicle connection or active TX test.
+1. **Feather implementation handoff captured**:
+   1. Added a dedicated resumable implementation plan in [`FEATHER_HYPERY11_PORT_PLAN.md`](./FEATHER_HYPERY11_PORT_PLAN.md).
+   1. Clarified that Goal A should use compiled hypery11-derived C++ feature logic first, not the ESP32/SPIFFS JSON plugin path.
+   1. Captured the native, golden-reference, bench CAN, and vehicle bring-up test matrix.
+   1. Recorded the local build blocker: `pio` was not found on the current shell `PATH`; check for a venv or install/activate PlatformIO before firmware builds.
 
 ## In progress
 
 1. **Implement the Feather logic-only port before vehicle TX**:
-   1. Extend the existing Feather MCP2515 path with explicit listen-only/normal mode control.
+   1. Start with explicit listen-only/normal mode control in the existing Feather MCP2515 path.
    1. Add a `CanFrame` adapter or native handler for the needed hypery11 logic.
    1. Implement Goal A first: nag suppression only, with DAS-aware gating and organic torque variation.
    1. Defer `0x3FD` region unlock, `0x7FF` Ban Shield, and `0x3F8` telemetry-disable code until nag-only operation is proven.

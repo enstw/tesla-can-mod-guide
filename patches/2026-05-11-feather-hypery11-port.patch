@@ -1,5 +1,5 @@
 diff --git a/include/app.h b/include/app.h
-index 9df7a75..f516716 100644
+index 9df7a75..8f90b76 100644
 --- a/include/app.h
 +++ b/include/app.h
 @@ -5,6 +5,7 @@
@@ -53,6 +53,32 @@ index 9df7a75..f516716 100644
 +
      appDriver->setFilters(appHandler->filterIds(), appHandler->filterIdCount());
      if constexpr (Driver::kSupportsISR)
+     {
+@@ -171,6 +186,17 @@ static void appLoop()
+ #endif
+ #endif
+ 
++    CarManagerBase *h = appActiveHandler ? appActiveHandler : appHandler.get();
++
++#if defined(FEATHER_HYPERY11) && !defined(NATIVE_BUILD)
++    // Safe static_cast: FEATHER_HYPERY11 builds only ever instantiate
++    // FeatherHypery11Handler via SelectedHandler. Avoids pulling RTTI into
++    // the firmware just for this one call site.
++    auto *fh = static_cast<FeatherHypery11Handler *>(h);
++    fh->setModeLabel(appDriver->mode() == CanMode::ListenOnly ? "LISTEN" : "ACTIVE");
++    fh->emitStatusIfDue(millis());
++#endif
++
+     if constexpr (Driver::kSupportsISR)
+     {
+         if (!frameReady)
+@@ -179,7 +205,6 @@ static void appLoop()
+     }
+ 
+     CanFrame frame;
+-    CarManagerBase *h = appActiveHandler ? appActiveHandler : appHandler.get();
+     uint8_t framesThisLoop = 0;
+     while (appDriver->read(frame))
      {
 diff --git a/include/drivers/can_driver.h b/include/drivers/can_driver.h
 index 051e0b0..d477ee1 100644
@@ -247,10 +273,10 @@ index 2690a59..113a6dd 100644
  };
 diff --git a/include/handlers_hypery11.h b/include/handlers_hypery11.h
 new file mode 100644
-index 0000000..1f71bfd
+index 0000000..2d691b7
 --- /dev/null
 +++ b/include/handlers_hypery11.h
-@@ -0,0 +1,215 @@
+@@ -0,0 +1,256 @@
 +#pragma once
 +
 +#include "can_frame_types.h"
@@ -283,6 +309,8 @@ index 0000000..1f71bfd
 +    Shared<uint32_t> nagBlockedListenOnly{0};
 +    Shared<uint32_t> nagBlockedOta{0};
 +    Shared<uint32_t> epasSeenCount{0};
++    Shared<uint32_t> gtwSeenCount{0};
++    Shared<uint32_t> dasSeenCount{0};
 +
 +    static constexpr uint32_t kIdEpasStatus = 0x370;   // 880
 +    static constexpr uint32_t kIdGtwCarState = 0x318;  // 792
@@ -329,6 +357,7 @@ index 0000000..1f71bfd
 +    {
 +        if (frame.dlc < 7)
 +            return;
++        gtwSeenCount++;
 +        // GTW_updateInProgress: byte 6 bits 1:0.
 +        // Raw values: 0=No update, 1=Available, 2=Installing, 3=Scheduled.
 +        // Only raw 2 must block TX (issue #19 documents false positives on 1).
@@ -340,6 +369,7 @@ index 0000000..1f71bfd
 +    {
 +        if (frame.dlc < 7)
 +            return;
++        dasSeenCount++;
 +        dasApState = (frame.data[1] >> 4) & 0x0F;
 +        dasHandsOnState = (frame.data[5] >> 2) & 0x0F;
 +        dasSeen = true;
@@ -353,7 +383,44 @@ index 0000000..1f71bfd
 +        framesUntilPulse_ = 175;
 +    }
 +
++    // Periodic Serial status dump for first-plug-in diagnostics. On native
++    // builds this compiles to nothing so tests stay quiet. On the firmware
++    // build it prints one line every ~1 s, designed to be grep-able and
++    // pipeable into a tee'd log file per the plan's vehicle bring-up step.
++    void emitStatusIfDue(unsigned long nowMs)
++    {
++#ifndef NATIVE_BUILD
++        if (nowMs - lastStatusMs_ < kStatusIntervalMs)
++            return;
++        lastStatusMs_ = nowMs;
++        Serial.printf(
++            "[STATUS] t=%lu mode=%s total=%u 370=%u 318=%u 39B=%u "
++            "dasSeen=%d dasHO=%u ota=%d echo=%u blkLO=%u blkOTA=%u\n",
++            nowMs,
++            currentModeLabel_,
++            static_cast<unsigned>(static_cast<uint32_t>(frameCount)),
++            static_cast<unsigned>(static_cast<uint32_t>(epasSeenCount)),
++            static_cast<unsigned>(static_cast<uint32_t>(gtwSeenCount)),
++            static_cast<unsigned>(static_cast<uint32_t>(dasSeenCount)),
++            static_cast<int>(static_cast<bool>(dasSeen)),
++            static_cast<unsigned>(static_cast<uint8_t>(dasHandsOnState)),
++            static_cast<int>(static_cast<bool>(otaInProgress)),
++            static_cast<unsigned>(static_cast<uint32_t>(nagEchoCount)),
++            static_cast<unsigned>(static_cast<uint32_t>(nagBlockedListenOnly)),
++            static_cast<unsigned>(static_cast<uint32_t>(nagBlockedOta)));
++#else
++        (void)nowMs;
++#endif
++    }
++
++    // Wired by appLoop so status output reflects the live driver mode.
++    void setModeLabel(const char *label) { currentModeLabel_ = label; }
++
 +private:
++    static constexpr unsigned long kStatusIntervalMs = 1000;
++    unsigned long lastStatusMs_ = 0;
++    const char *currentModeLabel_ = "INIT";
++
 +    uint32_t prngState_ = 0xDEADBEEFu;
 +    int16_t torqueWalk_ = kTorqueFixed;
 +    uint8_t pulseFramesLeft_ = 0;
@@ -700,10 +767,10 @@ index 0000000..0d9718e
 +}
 diff --git a/test/test_native_hypery11/test_hypery11_handler.cpp b/test/test_native_hypery11/test_hypery11_handler.cpp
 new file mode 100644
-index 0000000..ba3cddf
+index 0000000..e19974f
 --- /dev/null
 +++ b/test/test_native_hypery11/test_hypery11_handler.cpp
-@@ -0,0 +1,504 @@
+@@ -0,0 +1,542 @@
 +#include <unity.h>
 +#include "can_frame_types.h"
 +#include "drivers/can_driver.h"
@@ -1127,6 +1194,41 @@ index 0000000..ba3cddf
 +    TEST_ASSERT_EQUAL_UINT32(0, handler.nagEchoCount);
 +}
 +
++void test_gtw_seen_count_increments_only_on_318()
++{
++    deliver(makeGtwCarState(0));
++    deliver(makeGtwCarState(2));
++    deliver(makeDasStatus(2, 2));
++    deliver(makeEpasFrame(0, 0x05));
++    TEST_ASSERT_EQUAL_UINT32(2, handler.gtwSeenCount);
++    TEST_ASSERT_EQUAL_UINT32(1, handler.dasSeenCount);
++}
++
++void test_das_seen_count_increments_only_on_39B()
++{
++    deliver(makeDasStatus(0, 0));
++    deliver(makeDasStatus(2, 2));
++    deliver(makeDasStatus(3, 8));
++    deliver(makeGtwCarState(0));
++    TEST_ASSERT_EQUAL_UINT32(3, handler.dasSeenCount);
++    TEST_ASSERT_EQUAL_UINT32(1, handler.gtwSeenCount);
++}
++
++void test_status_emit_compiles_on_native_as_noop()
++{
++    // On NATIVE_BUILD emitStatusIfDue must be safe to call and must not
++    // touch Serial. The only assertion we can make natively is that calling
++    // it does not crash and does not produce any side effects observable
++    // through the public state.
++    handler.emitStatusIfDue(0);
++    handler.emitStatusIfDue(2000);
++    handler.setModeLabel("LISTEN");
++    handler.emitStatusIfDue(5000);
++    TEST_ASSERT_EQUAL_UINT32(0, handler.epasSeenCount);
++    TEST_ASSERT_EQUAL_UINT32(0, handler.gtwSeenCount);
++    TEST_ASSERT_EQUAL_UINT32(0, handler.dasSeenCount);
++}
++
 +void test_nag_echo_count_tracks_successful_echoes()
 +{
 +    seedActiveDas();
@@ -1201,6 +1303,9 @@ index 0000000..ba3cddf
 +    RUN_TEST(test_echo_preserves_bytes_0_1_5);
 +
 +    RUN_TEST(test_epas_seen_count_increments);
++    RUN_TEST(test_gtw_seen_count_increments_only_on_318);
++    RUN_TEST(test_das_seen_count_increments_only_on_39B);
++    RUN_TEST(test_status_emit_compiles_on_native_as_noop);
 +    RUN_TEST(test_nag_echo_count_tracks_successful_echoes);
 +
 +    RUN_TEST(test_unknown_id_is_ignored);

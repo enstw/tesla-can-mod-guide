@@ -1,6 +1,6 @@
 # Feather Hypery11 Port Plan
 
-Updated: 2026-05-10
+Updated: 2026-05-11
 
 This file is the resumable implementation plan for running hypery11-derived
 behavior on the selected Adafruit Feather RP2040 CAN hardware.
@@ -14,13 +14,136 @@ Read first:
 
 ## Current Baseline
 
-- Root guide repo: `fc56a7c`
-- `ev-open-can-tools`: `3b0bd91`
-- `flipper-tesla-fsd`: `888341d`
-- `ev-open-can-tools-plugins`: `1d9686b`
+- Root guide repo: `d94e9bd` (working tree carries the plan-doc updates and
+  the `patches/` directory described below).
+- `ev-open-can-tools`: `3b0bd91` — upstream is read-only from this workspace
+  (no fork). Section 1 / 2 / 3 source changes are captured as a patch in
+  `patches/2026-05-11-feather-hypery11-port.patch`. See "Resume Instructions"
+  below.
+- `flipper-tesla-fsd`: `ae25662` (advanced from `888341d` on 2026-05-11).
+- `ev-open-can-tools-plugins`: `1d9686b`.
 
-Reference repos were present and `git pull` reported up to date on
-2026-05-10.
+All four repos were pulled on 2026-05-11. PlatformIO 6.1.19 is installed via
+`uv tool install platformio` and `pio` is on PATH at `~/.local/bin/pio`.
+
+## Resume Instructions
+
+The implementation of Sections 1, 2, and 3 lives in
+`ev-open-can-tools/` which is gitignored from this root repo and cloned
+fresh from the upstream by the AGENTS.md pre-flight. A clean clone of
+`ev-open-can-tools` at `3b0bd91` does *not* contain the new handler, the
+driver mode API, or the new test suites — those are stored as a patch.
+
+To pick up where this session left off:
+
+```bash
+cd ev-open-can-tools
+# Confirm the patch applies cleanly against 3b0bd91. If git complains, the
+# upstream has moved and the patch needs a manual three-way merge.
+git apply --check ../patches/2026-05-11-feather-hypery11-port.patch
+git apply ../patches/2026-05-11-feather-hypery11-port.patch
+
+# Sanity-check the four native suites.
+pio test -e native
+pio test -e native_nag
+pio test -e native_can_mode
+pio test -e native_hypery11
+
+# Build the Feather firmware to verify the wiring.
+pio run -e feather_rp2040_can_hypery11
+```
+
+Expected outcome:
+
+- Native tests: 205/205 (132 + 28 + 12 + 33).
+- Firmware build: SUCCESS, `firmware.uf2` under
+  `.pio/build/feather_rp2040_can_hypery11/`.
+
+If `git apply --check` fails because the upstream has advanced past
+`3b0bd91`, the patch is still useful as a reference for the intended
+edits — re-port the new files (`include/handlers_hypery11.h`,
+`test/test_native_can_mode/`, `test/test_native_hypery11/`) and the
+driver mode changes by hand.
+
+## Section 1 Status (2026-05-11)
+
+Section 1 "CAN Mode Control" is implemented and green on native tests.
+
+- `CanMode` enum (`Normal`, `ListenOnly`) and `setMode()`/`mode()` API live on
+  base `CanDriver` (`include/drivers/can_driver.h`), with `mode_` stored in the
+  base class so all drivers preserve mode across calls.
+- `MCP2515Driver` and `ESP32_MCP2515Driver` apply mode to chip via
+  `setListenOnlyMode()` / `setNormalMode()`, preserve it through `init()` and
+  `setFilters()` (no more silent reset to Normal), and gate `send()` so
+  listen-only blocks TX at the driver level.
+- `MockDriver` tracks mode, gates TX, records blocked frames separately from
+  `sent`, and exposes `setFiltersCalls` for test assertions.
+- New native env `native_can_mode` with `test/test_native_can_mode/` covers
+  default mode, mode persistence across `setFilters`, send gating, callback
+  contract on blocked sends, and switch-back-to-Normal. 12/12 pass.
+- Regression: `native_nag` (28/28) and `native` umbrella (132/132) still pass.
+
+Deferred from Section 1:
+- TWAI and SAME51 drivers store mode in the base class but do not yet apply it
+  to hardware or gate `send()`. Out of scope for the Feather path; revisit if
+  ESP32-TWAI builds need listen-only too.
+
+## Sections 2 + 3 Status (2026-05-11)
+
+Hypery11 Feather state and Goal A nag logic are implemented and green on
+native tests.
+
+- New `FeatherHypery11Handler` (`include/handlers_hypery11.h`) ported from
+  `flipper-tesla-fsd/fsd_logic/fsd_handler.c` — `fsd_handle_nag_killer`,
+  `fsd_handle_gtw_car_state`, and the relevant slice of
+  `fsd_handle_das_status`. Op mode is read from `driver.mode()` rather than a
+  duplicate handler field, so the listen-only gate cannot drift out of sync.
+- Handler state: `otaInProgress`, `dasApState`, `dasHandsOnState`
+  (default 0xFF = unseen → conservative echo), `dasSeen`, `nagKillerActive`,
+  `dasGate`, `organicTorque`, and counters (`nagEchoCount`,
+  `nagBlockedListenOnly`, `nagBlockedOta`, `epasSeenCount`).
+- 0x370 echo path matches hypery11: clear handsOnLevel bits 7:6 and force
+  level=1, counter +1 (lower nibble, wraps), checksum
+  `sum(b0..b6) + 0x70 + 0x03`.
+- Organic torque: per-instance xorshift32, random walk in raw 2150-2290
+  (~1.00-2.40 Nm), grip pulses in raw 2330-2370 (~2.80-3.20 Nm) every
+  125-224 frames for 3-5 frames.
+- `app.h` SelectedHandler dispatch adds `FEATHER_HYPERY11`. `appSetup()`
+  now applies `setMode(CanMode::ListenOnly)` before `init()` when
+  `LISTEN_ONLY_BOOT` is defined, then preserves it through `setFilters()`
+  (Section 1 contract).
+- New env `native_hypery11` runs 33 tests covering Test Matrix items 3-14
+  (OTA gate, DAS parse, EPAS hands-on eligibility, DAS gate states 0/2/8,
+  unseen DAS conservative echo, listen-only suppression via driver mode,
+  nag-killer toggle, counter wrap, output checksum, torque envelope,
+  organic vs fixed torque, output ID/DLC, ignored unknown IDs, short DLC).
+  33/33 pass.
+- New firmware env `feather_rp2040_can_hypery11` selects
+  `DRIVER_MCP2515 + FEATHER_HYPERY11 + LISTEN_ONLY_BOOT`.
+
+Regression on 2026-05-11: `native` (132/132), `native_nag` (28/28),
+`native_can_mode` (12/12), `native_hypery11` (33/33) — 205/205 across the four
+suites.
+
+Firmware build sanity-check: `pio run -e feather_rp2040_can_hypery11` succeeded
+on 2026-05-11. The Feather build links cleanly with the new SelectedHandler
+dispatch + LISTEN_ONLY_BOOT block (RAM 3.6 %, Flash 0.8 %). `firmware.uf2` is
+produced under `ev-open-can-tools/.pio/build/feather_rp2040_can_hypery11/`.
+Note: the dedicated hypery11 env intentionally omits `extra_scripts =
+pre:scripts/platformio_sync_profile.py` because that script enforces the
+upstream `platformio_profile.h` workflow (LEGACY / HW3 / HW4 selection) which
+does not yet know about `FEATHER_HYPERY11`. All defines come straight from
+the env's `build_flags` instead.
+
+Deferred from Sections 2 + 3:
+- Section 4 serial runtime interface (`STATUS`, `MODE`, `NAG`, `LOG`).
+- Section 5 build flag refinement (currently `FEATHER_HYPERY11` is the only
+  switch; the per-feature flags `DAS_AWARE_GATE_ENABLED` /
+  `ORGANIC_TORQUE_ENABLED` are runtime toggles on the handler instead of
+  compile flags).
+- Section 3 task 1's "act on raw value 2 only" interpretation note: the
+  handler treats raw values 0/1/3 as not-installing and raw 2 as installing.
+  This matches `fsd_handle_gtw_car_state` exactly.
 
 The selected host is `ev-open-can-tools` environment `feather_rp2040_can`,
 which targets the Adafruit Feather RP2040 CAN with MCP2515/MCP25625 using the
@@ -141,7 +264,9 @@ Tasks:
    - nag feature enabled
    - not listen-only
    - not OTA installing
-   - EPAS hands-on level is `0` or `3`
+   - EPAS hands-on level is not `1`. Upstream intent is to act on level `0`
+     (nag imminent) and `3` (escalated alarm); the implementation skips only
+     level `1` (hands detected), so level `2` also passes through.
    - DAS hands-on state is not `0` and not `8`
 4. Build the echo:
    - ID `0x370`
@@ -150,7 +275,8 @@ Tasks:
    - counter = source lower nibble + 1
    - checksum = sum bytes 0..6 plus `0x70 + 0x03`
    - torque random walk about 1.00-2.40 Nm
-   - grip pulses about 3.10-3.30 Nm every 5-9 seconds
+   - grip pulses about 2.80-3.20 Nm (centered ~3.00 Nm, raw 2350 ± 20) every
+     5-9 seconds, lasting 3-5 frames
 5. Rate-limit serial/log output so runtime does not block CAN processing.
 
 ### 4. Serial Runtime Interface
@@ -280,11 +406,19 @@ Do not begin vehicle active TX until native and bench tests pass.
 
 ## Next Concrete Step
 
-Implement CAN mode support first. The next coding session should start with:
+Sections 1, 2, and 3 are done at the native-test level *and* the firmware
+build links cleanly. The next session should pick from:
 
-1. Update `CanDriver` with mode semantics.
-2. Update `MCP2515Driver` to support and preserve listen-only.
-3. Update `MockDriver` for tests.
-4. Add tests proving filter setup does not force active TX mode.
-
-Only after this lands should the hypery11-derived nag handler be added.
+1. **Section 4 — serial runtime interface.** Add a tiny command parser to
+   `appLoop()` (or a sibling helper) for `STATUS`, `MODE LISTEN`,
+   `MODE ACTIVE`, `NAG ON`, `NAG OFF`, `LOG`. `STATUS` should print
+   `driver.mode()`, `epasSeenCount`, `nagEchoCount`,
+   `nagBlockedListenOnly`, `nagBlockedOta`, `otaInProgress`, `dasSeen`,
+   `dasApState`, `dasHandsOnState`. Native-test the parser without CAN
+   hardware.
+2. **Bench CAN tests.** Per the existing Test Matrix "Bench CAN Tests"
+   section, validate the firmware against a second CAN node before any
+   vehicle TX.
+3. **Section 5 build-flag cleanup.** Move runtime toggles
+   (`dasGate`, `organicTorque`) behind compile flags so disabled features
+   shrink flash, and align flag names with `install-target.yaml`.

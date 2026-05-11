@@ -1,0 +1,1210 @@
+diff --git a/include/app.h b/include/app.h
+index 9df7a75..f516716 100644
+--- a/include/app.h
++++ b/include/app.h
+@@ -5,6 +5,7 @@
+ #include "drivers/can_driver.h"
+ #include "can_helpers.h"
+ #include "handlers.h"
++#include "handlers_hypery11.h"
+ 
+ #ifndef NATIVE_BUILD
+ #include <Arduino.h>
+@@ -17,7 +18,9 @@
+ #define PIN_LED 2
+ #endif
+ 
+-#if defined(ESP32_DASHBOARD)
++#if defined(FEATHER_HYPERY11)
++using SelectedHandler = FeatherHypery11Handler;
++#elif defined(ESP32_DASHBOARD)
+ #if DASH_DEFAULT_HW == 0
+ using SelectedHandler = LegacyHandler;
+ #elif DASH_DEFAULT_HW == 2
+@@ -34,7 +37,7 @@ using SelectedHandler = HW3Handler;
+ #elif defined(LEGACY)
+ using SelectedHandler = LegacyHandler;
+ #else
+-#error "Define HW4, HW3, LEGACY, or NAG_KILLER in build_flags"
++#error "Define HW4, HW3, LEGACY, NAG_KILLER, or FEATHER_HYPERY11 in build_flags"
+ #endif
+ 
+ static std::unique_ptr<CanDriver> appDriver;
+@@ -138,11 +141,23 @@ static void appSetup(std::unique_ptr<Driver> drv, const char *readyMsg)
+ #endif
+ 
+     appDriver = std::move(drv);
++
++#ifdef LISTEN_ONLY_BOOT
++    // Park the driver in ListenOnly *before* init so the bitrate/mode register
++    // write inside init() configures the chip passive on the first wire-up;
++    // setFilters() preserves the mode (Section 1 of the Feather port plan).
++    appDriver->setMode(CanMode::ListenOnly);
++#endif
++
+     if (!appDriver->init())
+     {
+         Serial.println("CAN init failed");
+     }
+ 
++#ifdef LISTEN_ONLY_BOOT
++    Serial.println("CAN driver boot mode: LISTEN_ONLY (no TX until MODE ACTIVE)");
++#endif
++
+     appDriver->setFilters(appHandler->filterIds(), appHandler->filterIdCount());
+     if constexpr (Driver::kSupportsISR)
+     {
+diff --git a/include/drivers/can_driver.h b/include/drivers/can_driver.h
+index 051e0b0..d477ee1 100644
+--- a/include/drivers/can_driver.h
++++ b/include/drivers/can_driver.h
+@@ -2,6 +2,12 @@
+ 
+ #include "../can_frame_types.h"
+ 
++enum class CanMode : uint8_t
++{
++    Normal = 0,
++    ListenOnly = 1,
++};
++
+ struct CanDriver
+ {
+     void (*onSendFrame)(const CanFrame &, bool ok) = nullptr;
+@@ -11,5 +17,16 @@ struct CanDriver
+     virtual bool enableInterrupt(void (*onReady)()) = 0;
+     virtual bool read(CanFrame &frame) = 0;
+     virtual bool send(const CanFrame &frame) = 0;
++
++    // Mode is stored in the base class so concrete drivers can preserve it
++    // through init/setFilters and gate TX in ListenOnly. Drivers that can
++    // configure the hardware (MCP2515) should override and apply mode_ to
++    // the chip; software-only drivers (Mock) just use the stored value.
++    virtual void setMode(CanMode mode) { mode_ = mode; }
++    CanMode mode() const { return mode_; }
++
+     virtual ~CanDriver() = default;
++
++protected:
++    CanMode mode_ = CanMode::Normal;
+ };
+diff --git a/include/drivers/esp32_mcp2515_driver.h b/include/drivers/esp32_mcp2515_driver.h
+index 4c4aa71..4124aa4 100644
+--- a/include/drivers/esp32_mcp2515_driver.h
++++ b/include/drivers/esp32_mcp2515_driver.h
+@@ -22,7 +22,7 @@ public:
+         MCP2515::ERROR e = mcp_.setBitrate(CAN_500KBPS, MCP_CRYSTAL_FREQ);
+         if (e != MCP2515::ERROR_OK)
+             return false;
+-        mcp_.setNormalMode();
++        applyMode();
+         return true;
+     }
+ 
+@@ -37,7 +37,7 @@ public:
+         mcp_.setFilter(MCP2515::RXF3, false, count > 3 ? ids[3] : ids[0]);
+         mcp_.setFilter(MCP2515::RXF4, false, count > 4 ? ids[4] : ids[0]);
+         mcp_.setFilter(MCP2515::RXF5, false, count > 5 ? ids[5] : ids[0]);
+-        mcp_.setNormalMode();
++        applyMode();
+     }
+ 
+     bool enableInterrupt(void (*)(void)) override
+@@ -58,6 +58,12 @@ public:
+ 
+     bool send(const CanFrame &frame) override
+     {
++        if (mode_ == CanMode::ListenOnly)
++        {
++            if (onSendFrame)
++                onSendFrame(frame, false);
++            return false;
++        }
+         can_frame raw;
+         raw.can_id = frame.id;
+         raw.can_dlc = frame.dlc;
+@@ -68,8 +74,22 @@ public:
+         return ok;
+     }
+ 
++    void setMode(CanMode mode) override
++    {
++        mode_ = mode;
++        applyMode();
++    }
++
+     MCP2515 &mcp() { return mcp_; }
+ 
+ private:
++    void applyMode()
++    {
++        if (mode_ == CanMode::ListenOnly)
++            mcp_.setListenOnlyMode();
++        else
++            mcp_.setNormalMode();
++    }
++
+     MCP2515 mcp_;
+ };
+diff --git a/include/drivers/mcp2515_driver.h b/include/drivers/mcp2515_driver.h
+index 620ca29..769f264 100644
+--- a/include/drivers/mcp2515_driver.h
++++ b/include/drivers/mcp2515_driver.h
+@@ -19,7 +19,7 @@ public:
+         MCP2515::ERROR e = mcp_.setBitrate(CAN_500KBPS, MCP_16MHZ);
+         if (e != MCP2515::ERROR_OK)
+             return false;
+-        mcp_.setNormalMode();
++        applyMode();
+         return true;
+     }
+ 
+@@ -34,7 +34,7 @@ public:
+         mcp_.setFilter(MCP2515::RXF3, false, count > 3 ? ids[3] : ids[0]);
+         mcp_.setFilter(MCP2515::RXF4, false, count > 4 ? ids[4] : ids[0]);
+         mcp_.setFilter(MCP2515::RXF5, false, count > 5 ? ids[5] : ids[0]);
+-        mcp_.setNormalMode();
++        applyMode();
+     }
+ 
+     bool enableInterrupt(void (*onReady)()) override
+@@ -57,6 +57,12 @@ public:
+ 
+     bool send(const CanFrame &frame) override
+     {
++        if (mode_ == CanMode::ListenOnly)
++        {
++            if (onSendFrame)
++                onSendFrame(frame, false);
++            return false;
++        }
+         can_frame raw;
+         raw.can_id = frame.id;
+         raw.can_dlc = frame.dlc;
+@@ -67,6 +73,20 @@ public:
+         return ok;
+     }
+ 
++    void setMode(CanMode mode) override
++    {
++        mode_ = mode;
++        applyMode();
++    }
++
+ private:
++    void applyMode()
++    {
++        if (mode_ == CanMode::ListenOnly)
++            mcp_.setListenOnlyMode();
++        else
++            mcp_.setNormalMode();
++    }
++
+     MCP2515 mcp_;
+ };
+diff --git a/include/drivers/mock_driver.h b/include/drivers/mock_driver.h
+index 2690a59..113a6dd 100644
+--- a/include/drivers/mock_driver.h
++++ b/include/drivers/mock_driver.h
+@@ -10,9 +10,14 @@ public:
+     static constexpr bool kSupportsISR = false;
+ 
+     std::vector<CanFrame> sent;
++    std::vector<CanFrame> blocked;
++    uint32_t setFiltersCalls = 0;
+ 
+     bool init() override { return true; }
+-    void setFilters(const uint32_t * /*ids*/, uint8_t /*count*/) override {}
++    void setFilters(const uint32_t * /*ids*/, uint8_t /*count*/) override
++    {
++        setFiltersCalls++;
++    }
+     bool enableInterrupt(void (* /*onReady*/)()) override { return false; }
+ 
+     bool read(CanFrame & /*frame*/) override
+@@ -22,6 +27,13 @@ public:
+ 
+     bool send(const CanFrame &frame) override
+     {
++        if (mode_ == CanMode::ListenOnly)
++        {
++            blocked.push_back(frame);
++            if (onSendFrame)
++                onSendFrame(frame, false);
++            return false;
++        }
+         sent.push_back(frame);
+         if (onSendFrame)
+             onSendFrame(frame, true);
+@@ -31,5 +43,8 @@ public:
+     void reset()
+     {
+         sent.clear();
++        blocked.clear();
++        setFiltersCalls = 0;
++        mode_ = CanMode::Normal;
+     }
+ };
+diff --git a/include/handlers_hypery11.h b/include/handlers_hypery11.h
+new file mode 100644
+index 0000000..1f71bfd
+--- /dev/null
++++ b/include/handlers_hypery11.h
+@@ -0,0 +1,215 @@
++#pragma once
++
++#include "can_frame_types.h"
++#include "drivers/can_driver.h"
++#include "handlers.h"
++
++// FeatherHypery11Handler — hypery11-derived Goal A nag suppression for the
++// Feather RP2040 CAN target. Behavior is ported from
++// flipper-tesla-fsd/fsd_logic/fsd_handler.c (fsd_handle_nag_killer plus
++// fsd_handle_gtw_car_state and fsd_handle_das_status).
++//
++// Listen-only op mode is taken from CanDriver::mode() so it cannot drift out
++// of sync with the hardware state; the handler does not own a duplicate field.
++struct FeatherHypery11Handler : public CarManagerBase
++{
++    // Runtime toggles.
++    Shared<bool> nagKillerActive{true};
++    Shared<bool> dasGate{true};
++    Shared<bool> organicTorque{true};
++
++    // Observed bus state.
++    Shared<bool> otaInProgress{false};
++    Shared<uint8_t> dasApState{0};
++    // 0xFF means no 0x39B frame seen yet — echo conservatively as fallback.
++    Shared<uint8_t> dasHandsOnState{0xFF};
++    Shared<bool> dasSeen{false};
++
++    // Counters / diagnostics.
++    Shared<uint32_t> nagEchoCount{0};
++    Shared<uint32_t> nagBlockedListenOnly{0};
++    Shared<uint32_t> nagBlockedOta{0};
++    Shared<uint32_t> epasSeenCount{0};
++
++    static constexpr uint32_t kIdEpasStatus = 0x370;   // 880
++    static constexpr uint32_t kIdGtwCarState = 0x318;  // 792
++    static constexpr uint32_t kIdDasStatus = 0x39B;    // 923
++
++    // Torque raw encoding: rawTorque = (Nm + 20.5) / 0.01
++    // Normal walk band ≈ [1.00, 2.40] Nm, grip pulse ≈ [3.10, 3.30] Nm.
++    static constexpr int16_t kTorqueWalkMin = 2150;    // 1.00 Nm
++    static constexpr int16_t kTorqueWalkMax = 2290;    // 2.40 Nm
++    static constexpr int16_t kTorquePulseMin = 2330;   // 2.80 Nm
++    static constexpr int16_t kTorquePulseMax = 2370;   // 3.20 Nm
++    static constexpr int16_t kTorqueFixed = 2230;      // 1.80 Nm fallback
++
++    const uint32_t *filterIds() const override
++    {
++        static constexpr uint32_t ids[] = {kIdEpasStatus, kIdGtwCarState, kIdDasStatus};
++        return ids;
++    }
++    uint8_t filterIdCount() const override { return 3; }
++
++    void handleMessage(CanFrame &frame, CanDriver &driver) override
++    {
++        if (onFrame)
++            onFrame(frame);
++
++        if (frame.id == kIdGtwCarState)
++        {
++            parseGtwCarState(frame);
++            return;
++        }
++        if (frame.id == kIdDasStatus)
++        {
++            parseDasStatus(frame);
++            return;
++        }
++        if (frame.id == kIdEpasStatus)
++        {
++            epasSeenCount++;
++            handleEpas(frame, driver);
++        }
++    }
++
++    void parseGtwCarState(const CanFrame &frame)
++    {
++        if (frame.dlc < 7)
++            return;
++        // GTW_updateInProgress: byte 6 bits 1:0.
++        // Raw values: 0=No update, 1=Available, 2=Installing, 3=Scheduled.
++        // Only raw 2 must block TX (issue #19 documents false positives on 1).
++        uint8_t raw = frame.data[6] & 0x03;
++        otaInProgress = (raw == 2);
++    }
++
++    void parseDasStatus(const CanFrame &frame)
++    {
++        if (frame.dlc < 7)
++            return;
++        dasApState = (frame.data[1] >> 4) & 0x0F;
++        dasHandsOnState = (frame.data[5] >> 2) & 0x0F;
++        dasSeen = true;
++    }
++
++    void seedPrng(uint32_t s)
++    {
++        prngState_ = s ? s : 0xDEADBEEFu;
++        torqueWalk_ = kTorqueFixed;
++        pulseFramesLeft_ = 0;
++        framesUntilPulse_ = 175;
++    }
++
++private:
++    uint32_t prngState_ = 0xDEADBEEFu;
++    int16_t torqueWalk_ = kTorqueFixed;
++    uint8_t pulseFramesLeft_ = 0;
++    uint16_t framesUntilPulse_ = 175;
++
++    uint32_t xorshift32()
++    {
++        uint32_t x = prngState_;
++        x ^= x << 13;
++        x ^= x >> 17;
++        x ^= x << 5;
++        prngState_ = x;
++        return x;
++    }
++
++    void handleEpas(const CanFrame &frame, CanDriver &driver)
++    {
++        if (frame.dlc < 8)
++            return;
++        if (!nagKillerActive)
++            return;
++        if (driver.mode() == CanMode::ListenOnly)
++        {
++            nagBlockedListenOnly++;
++            return;
++        }
++        if (otaInProgress)
++        {
++            nagBlockedOta++;
++            return;
++        }
++
++        // EPAS handsOnLevel — skip only on level 1 (hands detected).
++        // Echo on 0 (nag imminent), 2 (warn), 3 (escalated alarm).
++        uint8_t handsOn = (frame.data[4] >> 6) & 0x03;
++        if (handsOn == 1)
++            return;
++
++        if (dasGate)
++        {
++            uint8_t das = dasHandsOnState;
++            // 0 = NOT_REQD, 8 = SUSPENDED. Both mean DAS is satisfied.
++            // 0xFF (unseen) falls through and echoes conservatively.
++            if (das == 0 || das == 8)
++                return;
++        }
++
++        CanFrame echo;
++        echo.id = kIdEpasStatus;
++        echo.dlc = 8;
++        echo.bus = frame.bus;
++
++        echo.data[0] = frame.data[0];
++        echo.data[1] = frame.data[1];
++
++        int16_t torq = nextTorqueRaw();
++        echo.data[2] = (frame.data[2] & 0xF0) | static_cast<uint8_t>((torq >> 8) & 0x0F);
++        echo.data[3] = static_cast<uint8_t>(torq & 0xFF);
++
++        // Clear handsOnLevel bits 7:6 before setting level=1.
++        echo.data[4] = (frame.data[4] & ~0xC0u) | 0x40u;
++        echo.data[5] = frame.data[5];
++
++        uint8_t cnt = (frame.data[6] & 0x0F);
++        cnt = (cnt + 1) & 0x0F;
++        echo.data[6] = (frame.data[6] & 0xF0) | cnt;
++
++        uint16_t sum = 0;
++        for (int i = 0; i < 7; i++)
++            sum += echo.data[i];
++        sum += (kIdEpasStatus & 0xFF) + ((kIdEpasStatus >> 8) & 0xFF);
++        echo.data[7] = static_cast<uint8_t>(sum & 0xFF);
++
++        framesSent++;
++        nagEchoCount++;
++        driver.send(echo);
++    }
++
++    int16_t nextTorqueRaw()
++    {
++        if (!organicTorque)
++            return kTorqueFixed;
++
++        if (pulseFramesLeft_ > 0)
++        {
++            int16_t pulse = 2350 + static_cast<int16_t>((xorshift32() % 41) - 20);
++            pulseFramesLeft_--;
++            return pulse;
++        }
++
++        int16_t step = static_cast<int16_t>((xorshift32() % 31) - 15);
++        torqueWalk_ += step;
++        if (torqueWalk_ < kTorqueWalkMin)
++            torqueWalk_ = kTorqueWalkMin;
++        if (torqueWalk_ > kTorqueWalkMax)
++            torqueWalk_ = kTorqueWalkMax;
++
++        if (framesUntilPulse_ > 0)
++        {
++            framesUntilPulse_--;
++        }
++        else
++        {
++            // Pulse lasts 3-5 frames, with 125-224 frames (~5-9 s at 25 Hz)
++            // between pulses.
++            pulseFramesLeft_ = 3 + static_cast<uint8_t>(xorshift32() % 3);
++            framesUntilPulse_ = 125 + static_cast<uint16_t>(xorshift32() % 100);
++        }
++
++        return torqueWalk_;
++    }
++};
+diff --git a/platformio.ini b/platformio.ini
+index 1ab353a..1100ff4 100644
+--- a/platformio.ini
++++ b/platformio.ini
+@@ -7,6 +7,17 @@ board_build.core = earlephilhower
+ lib_deps = autowp/autowp-mcp2515
+ build_flags = -DDRIVER_MCP2515
+ 
++[env:feather_rp2040_can_hypery11]
++platform = https://github.com/maxgerhardt/platform-raspberrypi.git
++board = adafruit_feather_can
++framework = arduino
++board_build.core = earlephilhower
++lib_deps = autowp/autowp-mcp2515
++build_flags =
++    -DDRIVER_MCP2515
++    -DFEATHER_HYPERY11
++    -DLISTEN_ONLY_BOOT
++
+ [env:feather_m4_can]
+ platform = atmelsam
+ board = adafruit_feather_m4_can
+@@ -174,7 +185,9 @@ platform = native
+ extra_scripts = pre:scripts/platformio_native_env.py
+ test_ignore =
+     test_native_bypass_tlssc_requirement
++    test_native_can_mode
+     test_native_dashboard
++    test_native_hypery11
+     test_native_injection_after_ap
+     test_native_nag
+     test_native_plugin_engine
+@@ -206,6 +219,18 @@ extra_scripts = pre:scripts/platformio_native_env.py
+ build_flags = -std=c++17 -DNATIVE_BUILD -DNAG_KILLER
+ test_filter = test_native_nag
+ 
++[env:native_can_mode]
++platform = native
++extra_scripts = pre:scripts/platformio_native_env.py
++build_flags = -std=c++17 -DNATIVE_BUILD
++test_filter = test_native_can_mode
++
++[env:native_hypery11]
++platform = native
++extra_scripts = pre:scripts/platformio_native_env.py
++build_flags = -std=c++17 -DNATIVE_BUILD -DFEATHER_HYPERY11
++test_filter = test_native_hypery11
++
+ [env:native_injection_after_ap]
+ platform = native
+ extra_scripts = pre:scripts/platformio_native_env.py
+diff --git a/test/test_native_can_mode/test_can_mode.cpp b/test/test_native_can_mode/test_can_mode.cpp
+new file mode 100644
+index 0000000..0d9718e
+--- /dev/null
++++ b/test/test_native_can_mode/test_can_mode.cpp
+@@ -0,0 +1,175 @@
++#include <unity.h>
++#include "can_frame_types.h"
++#include "drivers/can_driver.h"
++#include "drivers/mock_driver.h"
++
++static MockDriver mock;
++
++static CanFrame makeFrame(uint32_t id = 0x370)
++{
++    CanFrame f = {.id = id, .dlc = 8};
++    for (int i = 0; i < 8; i++)
++        f.data[i] = static_cast<uint8_t>(i + 1);
++    return f;
++}
++
++void setUp() { mock.reset(); }
++void tearDown() {}
++
++void test_default_mode_is_normal()
++{
++    TEST_ASSERT_EQUAL(static_cast<int>(CanMode::Normal),
++                      static_cast<int>(mock.mode()));
++}
++
++void test_set_mode_listen_only_persists()
++{
++    mock.setMode(CanMode::ListenOnly);
++    TEST_ASSERT_EQUAL(static_cast<int>(CanMode::ListenOnly),
++                      static_cast<int>(mock.mode()));
++}
++
++void test_set_mode_back_to_normal_persists()
++{
++    mock.setMode(CanMode::ListenOnly);
++    mock.setMode(CanMode::Normal);
++    TEST_ASSERT_EQUAL(static_cast<int>(CanMode::Normal),
++                      static_cast<int>(mock.mode()));
++}
++
++void test_send_succeeds_in_normal_mode()
++{
++    CanFrame f = makeFrame();
++    bool ok = mock.send(f);
++    TEST_ASSERT_TRUE(ok);
++    TEST_ASSERT_EQUAL(1, mock.sent.size());
++    TEST_ASSERT_EQUAL(0, mock.blocked.size());
++}
++
++void test_send_blocked_in_listen_only_mode()
++{
++    mock.setMode(CanMode::ListenOnly);
++    CanFrame f = makeFrame();
++    bool ok = mock.send(f);
++    TEST_ASSERT_FALSE(ok);
++    TEST_ASSERT_EQUAL(0, mock.sent.size());
++    TEST_ASSERT_EQUAL(1, mock.blocked.size());
++    TEST_ASSERT_EQUAL_UINT32(0x370, mock.blocked[0].id);
++}
++
++void test_multiple_sends_all_blocked_in_listen_only()
++{
++    mock.setMode(CanMode::ListenOnly);
++    for (int i = 0; i < 5; i++)
++        mock.send(makeFrame(0x100 + i));
++    TEST_ASSERT_EQUAL(0, mock.sent.size());
++    TEST_ASSERT_EQUAL(5, mock.blocked.size());
++}
++
++void test_switching_from_listen_only_to_normal_allows_send()
++{
++    mock.setMode(CanMode::ListenOnly);
++    mock.send(makeFrame(0x111));
++    TEST_ASSERT_EQUAL(0, mock.sent.size());
++    TEST_ASSERT_EQUAL(1, mock.blocked.size());
++
++    mock.setMode(CanMode::Normal);
++    bool ok = mock.send(makeFrame(0x222));
++    TEST_ASSERT_TRUE(ok);
++    TEST_ASSERT_EQUAL(1, mock.sent.size());
++    TEST_ASSERT_EQUAL(1, mock.blocked.size()); // prior block stays recorded
++}
++
++void test_set_filters_preserves_listen_only_mode()
++{
++    mock.setMode(CanMode::ListenOnly);
++    const uint32_t ids[] = {0x370, 0x39B, 0x318};
++    mock.setFilters(ids, 3);
++    TEST_ASSERT_EQUAL(static_cast<int>(CanMode::ListenOnly),
++                      static_cast<int>(mock.mode()));
++    TEST_ASSERT_EQUAL_UINT32(1, mock.setFiltersCalls);
++
++    // Sends after setFilters must still be blocked.
++    mock.send(makeFrame());
++    TEST_ASSERT_EQUAL(0, mock.sent.size());
++    TEST_ASSERT_EQUAL(1, mock.blocked.size());
++}
++
++void test_set_filters_preserves_normal_mode()
++{
++    // Sanity: Normal stays Normal across setFilters.
++    const uint32_t ids[] = {0x370};
++    mock.setFilters(ids, 1);
++    TEST_ASSERT_EQUAL(static_cast<int>(CanMode::Normal),
++                      static_cast<int>(mock.mode()));
++    bool ok = mock.send(makeFrame());
++    TEST_ASSERT_TRUE(ok);
++    TEST_ASSERT_EQUAL(1, mock.sent.size());
++}
++
++void test_repeated_set_filters_does_not_drop_listen_only()
++{
++    mock.setMode(CanMode::ListenOnly);
++    const uint32_t ids[] = {0x370};
++    for (int i = 0; i < 3; i++)
++        mock.setFilters(ids, 1);
++    TEST_ASSERT_EQUAL_UINT32(3, mock.setFiltersCalls);
++    TEST_ASSERT_EQUAL(static_cast<int>(CanMode::ListenOnly),
++                      static_cast<int>(mock.mode()));
++}
++
++// onSendFrame callback contract: ListenOnly fires the callback with ok=false
++// so callers see the blocked attempt without the driver silently dropping it.
++static int g_callbackCount = 0;
++static bool g_lastOk = true;
++static void recordCallback(const CanFrame & /*f*/, bool ok)
++{
++    g_callbackCount++;
++    g_lastOk = ok;
++}
++
++void test_listen_only_callback_reports_failure()
++{
++    g_callbackCount = 0;
++    g_lastOk = true;
++    mock.onSendFrame = recordCallback;
++    mock.setMode(CanMode::ListenOnly);
++    mock.send(makeFrame());
++    TEST_ASSERT_EQUAL(1, g_callbackCount);
++    TEST_ASSERT_FALSE(g_lastOk);
++    mock.onSendFrame = nullptr;
++}
++
++void test_normal_callback_reports_success()
++{
++    g_callbackCount = 0;
++    g_lastOk = false;
++    mock.onSendFrame = recordCallback;
++    mock.send(makeFrame());
++    TEST_ASSERT_EQUAL(1, g_callbackCount);
++    TEST_ASSERT_TRUE(g_lastOk);
++    mock.onSendFrame = nullptr;
++}
++
++int main()
++{
++    UNITY_BEGIN();
++
++    RUN_TEST(test_default_mode_is_normal);
++    RUN_TEST(test_set_mode_listen_only_persists);
++    RUN_TEST(test_set_mode_back_to_normal_persists);
++
++    RUN_TEST(test_send_succeeds_in_normal_mode);
++    RUN_TEST(test_send_blocked_in_listen_only_mode);
++    RUN_TEST(test_multiple_sends_all_blocked_in_listen_only);
++    RUN_TEST(test_switching_from_listen_only_to_normal_allows_send);
++
++    RUN_TEST(test_set_filters_preserves_listen_only_mode);
++    RUN_TEST(test_set_filters_preserves_normal_mode);
++    RUN_TEST(test_repeated_set_filters_does_not_drop_listen_only);
++
++    RUN_TEST(test_listen_only_callback_reports_failure);
++    RUN_TEST(test_normal_callback_reports_success);
++
++    return UNITY_END();
++}
+diff --git a/test/test_native_hypery11/test_hypery11_handler.cpp b/test/test_native_hypery11/test_hypery11_handler.cpp
+new file mode 100644
+index 0000000..ba3cddf
+--- /dev/null
++++ b/test/test_native_hypery11/test_hypery11_handler.cpp
+@@ -0,0 +1,504 @@
++#include <unity.h>
++#include "can_frame_types.h"
++#include "drivers/can_driver.h"
++#include "drivers/mock_driver.h"
++#include "handlers_hypery11.h"
++
++static MockDriver mock;
++static FeatherHypery11Handler handler;
++
++// --- Frame builders -----------------------------------------------------
++
++// 0x370 EPAS3P_sysStatus stub with controllable handsOnLevel + counter.
++// Checksum is recomputed so input frames are self-consistent (handler does
++// not verify input checksum, but real-bus frames will be valid).
++static CanFrame makeEpasFrame(uint8_t handsOn, uint8_t counter)
++{
++    CanFrame f = {.id = 0x370, .dlc = 8};
++    f.data[0] = 0x12;
++    f.data[1] = 0x00;
++    f.data[2] = 0x08; // upper nibble = flags, lower will get torque hi
++    f.data[3] = 0xB6; // dummy torque
++    f.data[4] = static_cast<uint8_t>(((handsOn & 0x03) << 6) | 0x1F);
++    f.data[5] = 0x89;
++    f.data[6] = static_cast<uint8_t>((0x20) | (counter & 0x0F));
++    uint16_t sum = 0;
++    for (int i = 0; i < 7; i++)
++        sum += f.data[i];
++    sum += 0x70 + 0x03;
++    f.data[7] = static_cast<uint8_t>(sum & 0xFF);
++    return f;
++}
++
++// 0x318 GTW_carState — only byte 6 bits 1:0 matter for OTA gating.
++static CanFrame makeGtwCarState(uint8_t otaRaw)
++{
++    CanFrame f = {.id = 0x318, .dlc = 8};
++    f.data[6] = otaRaw & 0x03;
++    return f;
++}
++
++// 0x39B DAS_status — DAS_autopilotState (byte1 hi nibble) + handsOnState
++// (byte5 bits 5:2).
++static CanFrame makeDasStatus(uint8_t apState, uint8_t handsOnState)
++{
++    CanFrame f = {.id = 0x39B, .dlc = 8};
++    f.data[1] = static_cast<uint8_t>((apState & 0x0F) << 4);
++    f.data[5] = static_cast<uint8_t>((handsOnState & 0x0F) << 2);
++    return f;
++}
++
++static bool verifyEchoChecksum(const CanFrame &f)
++{
++    uint16_t sum = 0;
++    for (int i = 0; i < 7; i++)
++        sum += f.data[i];
++    sum += 0x70 + 0x03;
++    return f.data[7] == static_cast<uint8_t>(sum & 0xFF);
++}
++
++// handleMessage takes CanFrame& (non-const), so test call sites cannot pass
++// temporaries directly. This trampoline accepts by value and forwards as
++// lvalue, keeping the test bodies compact.
++static void deliver(CanFrame f) { handler.handleMessage(f, mock); }
++
++static int16_t decodeTorqueRaw(const CanFrame &f)
++{
++    return static_cast<int16_t>(((f.data[2] & 0x0F) << 8) | f.data[3]);
++}
++
++void setUp()
++{
++    mock.reset();
++    handler = FeatherHypery11Handler();
++    handler.enablePrint = false;
++    handler.seedPrng(0x12345678u);
++}
++void tearDown() {}
++
++// --- Filter IDs ---------------------------------------------------------
++
++void test_filter_ids_includes_required_frames()
++{
++    TEST_ASSERT_EQUAL_UINT8(3, handler.filterIdCount());
++    const uint32_t *ids = handler.filterIds();
++    bool has370 = false, has318 = false, has39b = false;
++    for (uint8_t i = 0; i < handler.filterIdCount(); i++)
++    {
++        if (ids[i] == 0x370) has370 = true;
++        if (ids[i] == 0x318) has318 = true;
++        if (ids[i] == 0x39B) has39b = true;
++    }
++    TEST_ASSERT_TRUE(has370);
++    TEST_ASSERT_TRUE(has318);
++    TEST_ASSERT_TRUE(has39b);
++}
++
++// --- 0x318 OTA gating ---------------------------------------------------
++
++void test_ota_raw_2_blocks_tx()
++{
++    CanFrame ota = makeGtwCarState(2);
++    handler.handleMessage(ota, mock);
++    TEST_ASSERT_TRUE(handler.otaInProgress);
++
++    // Seed DAS state so dasGate is not the reason for blocking.
++    CanFrame das = makeDasStatus(2, 2);
++    handler.handleMessage(das, mock);
++
++    CanFrame epas = makeEpasFrame(0, 0x05);
++    handler.handleMessage(epas, mock);
++    TEST_ASSERT_EQUAL(0, mock.sent.size());
++    TEST_ASSERT_EQUAL_UINT32(1, handler.nagBlockedOta);
++}
++
++void test_ota_raw_0_does_not_set_in_progress()
++{
++    CanFrame ota = makeGtwCarState(0);
++    handler.handleMessage(ota, mock);
++    TEST_ASSERT_FALSE(handler.otaInProgress);
++}
++
++void test_ota_raw_1_does_not_set_in_progress()
++{
++    // "Available" must not block — historical false-positive (hypery11 #19).
++    CanFrame ota = makeGtwCarState(1);
++    handler.handleMessage(ota, mock);
++    TEST_ASSERT_FALSE(handler.otaInProgress);
++}
++
++void test_ota_raw_3_does_not_set_in_progress()
++{
++    CanFrame ota = makeGtwCarState(3);
++    handler.handleMessage(ota, mock);
++    TEST_ASSERT_FALSE(handler.otaInProgress);
++}
++
++void test_ota_clears_when_back_to_0()
++{
++    deliver(makeGtwCarState(2));
++    TEST_ASSERT_TRUE(handler.otaInProgress);
++    deliver(makeGtwCarState(0));
++    TEST_ASSERT_FALSE(handler.otaInProgress);
++}
++
++// --- 0x39B DAS parse ---------------------------------------------------
++
++void test_das_status_parses_ap_state()
++{
++    deliver(makeDasStatus(0x0A, 0x05));
++    TEST_ASSERT_EQUAL_UINT8(0x0A, handler.dasApState);
++}
++
++void test_das_status_parses_hands_on_state()
++{
++    deliver(makeDasStatus(0x02, 0x07));
++    TEST_ASSERT_EQUAL_UINT8(0x07, handler.dasHandsOnState);
++    TEST_ASSERT_TRUE(handler.dasSeen);
++}
++
++// --- 0x370 echo eligibility --------------------------------------------
++
++// Helper: drive DAS state into "echo allowed" territory (not 0, not 8).
++static void seedActiveDas()
++{
++    deliver(makeDasStatus(2, 2));
++}
++
++void test_epas_handson_0_produces_echo_when_active()
++{
++    seedActiveDas();
++    CanFrame epas = makeEpasFrame(0, 0x05);
++    handler.handleMessage(epas, mock);
++    TEST_ASSERT_EQUAL(1, mock.sent.size());
++    TEST_ASSERT_EQUAL_UINT32(0x370, mock.sent[0].id);
++}
++
++void test_epas_handson_3_produces_echo_and_clears_level_to_1()
++{
++    seedActiveDas();
++    CanFrame epas = makeEpasFrame(3, 0x05);
++    handler.handleMessage(epas, mock);
++    TEST_ASSERT_EQUAL(1, mock.sent.size());
++    uint8_t outLevel = (mock.sent[0].data[4] >> 6) & 0x03;
++    TEST_ASSERT_EQUAL_UINT8(1, outLevel);
++}
++
++void test_epas_handson_2_produces_echo()
++{
++    // Level 2 (warn) is not the skip level — should still echo.
++    seedActiveDas();
++    CanFrame epas = makeEpasFrame(2, 0x05);
++    handler.handleMessage(epas, mock);
++    TEST_ASSERT_EQUAL(1, mock.sent.size());
++}
++
++void test_epas_handson_1_produces_no_echo()
++{
++    seedActiveDas();
++    CanFrame epas = makeEpasFrame(1, 0x05);
++    handler.handleMessage(epas, mock);
++    TEST_ASSERT_EQUAL(0, mock.sent.size());
++}
++
++// --- DAS gate ----------------------------------------------------------
++
++void test_das_state_0_blocks_echo()
++{
++    deliver(makeDasStatus(2, 0));
++    CanFrame epas = makeEpasFrame(0, 0x05);
++    handler.handleMessage(epas, mock);
++    TEST_ASSERT_EQUAL(0, mock.sent.size());
++}
++
++void test_das_state_8_blocks_echo()
++{
++    deliver(makeDasStatus(2, 8));
++    CanFrame epas = makeEpasFrame(0, 0x05);
++    handler.handleMessage(epas, mock);
++    TEST_ASSERT_EQUAL(0, mock.sent.size());
++}
++
++void test_das_state_2_allows_echo()
++{
++    deliver(makeDasStatus(2, 2));
++    CanFrame epas = makeEpasFrame(0, 0x05);
++    handler.handleMessage(epas, mock);
++    TEST_ASSERT_EQUAL(1, mock.sent.size());
++}
++
++void test_unseen_das_state_0xff_echoes_conservatively()
++{
++    // No 0x39B seen yet — dasHandsOnState stays 0xFF, gate must allow echo.
++    TEST_ASSERT_FALSE(handler.dasSeen);
++    TEST_ASSERT_EQUAL_UINT8(0xFF, handler.dasHandsOnState);
++    CanFrame epas = makeEpasFrame(0, 0x05);
++    handler.handleMessage(epas, mock);
++    TEST_ASSERT_EQUAL(1, mock.sent.size());
++}
++
++void test_das_gate_disabled_overrides_block()
++{
++    deliver(makeDasStatus(2, 0));
++    handler.dasGate = false;
++    CanFrame epas = makeEpasFrame(0, 0x05);
++    handler.handleMessage(epas, mock);
++    TEST_ASSERT_EQUAL(1, mock.sent.size());
++}
++
++// --- Listen-only gating ------------------------------------------------
++
++void test_listen_only_blocks_echo_via_driver_mode()
++{
++    seedActiveDas();
++    mock.setMode(CanMode::ListenOnly);
++    CanFrame epas = makeEpasFrame(0, 0x05);
++    handler.handleMessage(epas, mock);
++    TEST_ASSERT_EQUAL(0, mock.sent.size());
++    TEST_ASSERT_EQUAL(0, mock.blocked.size()); // handler returned before send()
++    TEST_ASSERT_EQUAL_UINT32(1, handler.nagBlockedListenOnly);
++}
++
++// --- nagKillerActive toggle --------------------------------------------
++
++void test_nag_killer_disabled_blocks_echo()
++{
++    seedActiveDas();
++    handler.nagKillerActive = false;
++    CanFrame epas = makeEpasFrame(0, 0x05);
++    handler.handleMessage(epas, mock);
++    TEST_ASSERT_EQUAL(0, mock.sent.size());
++    TEST_ASSERT_EQUAL_UINT32(0, handler.nagEchoCount);
++}
++
++// --- Counter wrap ------------------------------------------------------
++
++void test_counter_increments_by_1()
++{
++    seedActiveDas();
++    deliver(makeEpasFrame(0, 0x05));
++    uint8_t cnt = mock.sent[0].data[6] & 0x0F;
++    TEST_ASSERT_EQUAL_HEX8(0x06, cnt);
++}
++
++void test_counter_wraps_from_f_to_0()
++{
++    seedActiveDas();
++    deliver(makeEpasFrame(0, 0x0F));
++    uint8_t cnt = mock.sent[0].data[6] & 0x0F;
++    TEST_ASSERT_EQUAL_HEX8(0x00, cnt);
++}
++
++void test_counter_preserves_upper_nibble()
++{
++    seedActiveDas();
++    CanFrame epas = makeEpasFrame(0, 0x05);
++    epas.data[6] = (epas.data[6] & 0x0F) | 0xA0; // force upper = 0xA
++    // recompute input checksum
++    uint16_t sum = 0;
++    for (int i = 0; i < 7; i++)
++        sum += epas.data[i];
++    sum += 0x70 + 0x03;
++    epas.data[7] = static_cast<uint8_t>(sum);
++
++    handler.handleMessage(epas, mock);
++    TEST_ASSERT_EQUAL(1, mock.sent.size());
++    uint8_t upper = mock.sent[0].data[6] & 0xF0;
++    TEST_ASSERT_EQUAL_HEX8(0xA0, upper);
++}
++
++// --- Output checksum ---------------------------------------------------
++
++void test_echo_checksum_is_correct()
++{
++    seedActiveDas();
++    deliver(makeEpasFrame(0, 0x05));
++    TEST_ASSERT_EQUAL(1, mock.sent.size());
++    TEST_ASSERT_TRUE(verifyEchoChecksum(mock.sent[0]));
++}
++
++void test_echo_checksum_correct_across_counter_sweep()
++{
++    seedActiveDas();
++    for (uint8_t c = 0; c < 16; c++)
++    {
++        mock.reset();
++        handler.seedPrng(0x12345678u);
++        seedActiveDas();
++        deliver(makeEpasFrame(0, c));
++        TEST_ASSERT_EQUAL(1, mock.sent.size());
++        TEST_ASSERT_TRUE_MESSAGE(verifyEchoChecksum(mock.sent[0]),
++                                 "echo checksum failed on counter sweep");
++    }
++}
++
++// --- Organic torque range ---------------------------------------------
++
++void test_organic_torque_stays_in_planned_envelope()
++{
++    // With organicTorque on, every echoed torque must be inside the union
++    // of the walk band [kTorqueWalkMin, kTorqueWalkMax] and the pulse band
++    // [kTorquePulseMin, kTorquePulseMax].
++    seedActiveDas();
++    handler.organicTorque = true;
++    int seenWalk = 0, seenPulse = 0;
++    for (int i = 0; i < 500; i++)
++    {
++        CanFrame epas = makeEpasFrame(0, i & 0x0F);
++        handler.handleMessage(epas, mock);
++    }
++    TEST_ASSERT_EQUAL(500, mock.sent.size());
++    for (const auto &f : mock.sent)
++    {
++        int16_t torq = decodeTorqueRaw(f);
++        bool inWalk = (torq >= FeatherHypery11Handler::kTorqueWalkMin &&
++                       torq <= FeatherHypery11Handler::kTorqueWalkMax);
++        bool inPulse = (torq >= FeatherHypery11Handler::kTorquePulseMin &&
++                        torq <= FeatherHypery11Handler::kTorquePulseMax);
++        if (inWalk) seenWalk++;
++        if (inPulse) seenPulse++;
++        TEST_ASSERT_TRUE_MESSAGE(inWalk || inPulse,
++                                 "torque outside walk/pulse envelope");
++    }
++    // We expect both populations to appear in a 500-frame run.
++    TEST_ASSERT_TRUE(seenWalk > 0);
++    TEST_ASSERT_TRUE(seenPulse > 0);
++}
++
++void test_organic_torque_disabled_returns_fixed_value()
++{
++    seedActiveDas();
++    handler.organicTorque = false;
++    deliver(makeEpasFrame(0, 0x05));
++    TEST_ASSERT_EQUAL(1, mock.sent.size());
++    int16_t torq = decodeTorqueRaw(mock.sent[0]);
++    TEST_ASSERT_EQUAL_INT16(FeatherHypery11Handler::kTorqueFixed, torq);
++}
++
++// --- Output shape ------------------------------------------------------
++
++void test_echo_id_is_0x370()
++{
++    seedActiveDas();
++    deliver(makeEpasFrame(0, 0x05));
++    TEST_ASSERT_EQUAL_UINT32(0x370, mock.sent[0].id);
++}
++
++void test_echo_dlc_is_8()
++{
++    seedActiveDas();
++    deliver(makeEpasFrame(0, 0x05));
++    TEST_ASSERT_EQUAL_UINT8(8, mock.sent[0].dlc);
++}
++
++void test_echo_preserves_bytes_0_1_5()
++{
++    seedActiveDas();
++    CanFrame epas = makeEpasFrame(0, 0x05);
++    epas.data[0] = 0xAB;
++    epas.data[1] = 0xCD;
++    epas.data[5] = 0x42;
++    uint16_t sum = 0;
++    for (int i = 0; i < 7; i++)
++        sum += epas.data[i];
++    sum += 0x70 + 0x03;
++    epas.data[7] = static_cast<uint8_t>(sum);
++
++    handler.handleMessage(epas, mock);
++    TEST_ASSERT_EQUAL(1, mock.sent.size());
++    TEST_ASSERT_EQUAL_HEX8(0xAB, mock.sent[0].data[0]);
++    TEST_ASSERT_EQUAL_HEX8(0xCD, mock.sent[0].data[1]);
++    TEST_ASSERT_EQUAL_HEX8(0x42, mock.sent[0].data[5]);
++}
++
++// --- Counters ----------------------------------------------------------
++
++void test_epas_seen_count_increments()
++{
++    CanFrame epas = makeEpasFrame(1, 0x05); // level 1 → no echo, still counts as seen
++    handler.handleMessage(epas, mock);
++    TEST_ASSERT_EQUAL_UINT32(1, handler.epasSeenCount);
++    TEST_ASSERT_EQUAL_UINT32(0, handler.nagEchoCount);
++}
++
++void test_nag_echo_count_tracks_successful_echoes()
++{
++    seedActiveDas();
++    for (int i = 0; i < 4; i++)
++        deliver(makeEpasFrame(0, i));
++    TEST_ASSERT_EQUAL_UINT32(4, handler.nagEchoCount);
++    TEST_ASSERT_EQUAL_UINT32(4, handler.framesSent);
++}
++
++// --- Non-target frames ignored ----------------------------------------
++
++void test_unknown_id_is_ignored()
++{
++    CanFrame f = {.id = 0x123, .dlc = 8};
++    handler.handleMessage(f, mock);
++    TEST_ASSERT_EQUAL(0, mock.sent.size());
++    TEST_ASSERT_EQUAL_UINT32(0, handler.epasSeenCount);
++    TEST_ASSERT_FALSE(handler.otaInProgress);
++    TEST_ASSERT_FALSE(handler.dasSeen);
++}
++
++void test_short_epas_dlc_does_not_echo()
++{
++    seedActiveDas();
++    CanFrame epas = makeEpasFrame(0, 0x05);
++    epas.dlc = 7;
++    handler.handleMessage(epas, mock);
++    TEST_ASSERT_EQUAL(0, mock.sent.size());
++}
++
++int main()
++{
++    UNITY_BEGIN();
++
++    RUN_TEST(test_filter_ids_includes_required_frames);
++
++    RUN_TEST(test_ota_raw_2_blocks_tx);
++    RUN_TEST(test_ota_raw_0_does_not_set_in_progress);
++    RUN_TEST(test_ota_raw_1_does_not_set_in_progress);
++    RUN_TEST(test_ota_raw_3_does_not_set_in_progress);
++    RUN_TEST(test_ota_clears_when_back_to_0);
++
++    RUN_TEST(test_das_status_parses_ap_state);
++    RUN_TEST(test_das_status_parses_hands_on_state);
++
++    RUN_TEST(test_epas_handson_0_produces_echo_when_active);
++    RUN_TEST(test_epas_handson_3_produces_echo_and_clears_level_to_1);
++    RUN_TEST(test_epas_handson_2_produces_echo);
++    RUN_TEST(test_epas_handson_1_produces_no_echo);
++
++    RUN_TEST(test_das_state_0_blocks_echo);
++    RUN_TEST(test_das_state_8_blocks_echo);
++    RUN_TEST(test_das_state_2_allows_echo);
++    RUN_TEST(test_unseen_das_state_0xff_echoes_conservatively);
++    RUN_TEST(test_das_gate_disabled_overrides_block);
++
++    RUN_TEST(test_listen_only_blocks_echo_via_driver_mode);
++    RUN_TEST(test_nag_killer_disabled_blocks_echo);
++
++    RUN_TEST(test_counter_increments_by_1);
++    RUN_TEST(test_counter_wraps_from_f_to_0);
++    RUN_TEST(test_counter_preserves_upper_nibble);
++
++    RUN_TEST(test_echo_checksum_is_correct);
++    RUN_TEST(test_echo_checksum_correct_across_counter_sweep);
++
++    RUN_TEST(test_organic_torque_stays_in_planned_envelope);
++    RUN_TEST(test_organic_torque_disabled_returns_fixed_value);
++
++    RUN_TEST(test_echo_id_is_0x370);
++    RUN_TEST(test_echo_dlc_is_8);
++    RUN_TEST(test_echo_preserves_bytes_0_1_5);
++
++    RUN_TEST(test_epas_seen_count_increments);
++    RUN_TEST(test_nag_echo_count_tracks_successful_echoes);
++
++    RUN_TEST(test_unknown_id_is_ignored);
++    RUN_TEST(test_short_epas_dlc_does_not_echo);
++
++    return UNITY_END();
++}

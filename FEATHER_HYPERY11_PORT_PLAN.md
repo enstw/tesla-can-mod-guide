@@ -101,7 +101,16 @@ native tests.
 - Handler state: `otaInProgress`, `dasApState`, `dasHandsOnState`
   (default 0xFF = unseen → conservative echo), `dasSeen`, `nagKillerActive`,
   `dasGate`, `organicTorque`, and counters (`nagEchoCount`,
-  `nagBlockedListenOnly`, `nagBlockedOta`, `epasSeenCount`).
+  `nagBlockedListenOnly`, `nagBlockedOta`, `epasSeenCount`, `gtwSeenCount`,
+  `dasSeenCount`).
+- Periodic Serial status emitter (`emitStatusIfDue`) wired from
+  `app.h::appLoop` prints one line every ~1 s on the firmware build:
+  `[STATUS] t=<ms> mode=<LISTEN|ACTIVE> total=<n> 370=<n> 318=<n> 39B=<n>
+  dasSeen=<0|1> dasHO=<n> ota=<0|1> echo=<n> blkLO=<n> blkOTA=<n>`. Compiles
+  to a no-op on `NATIVE_BUILD`. This is what makes listen-only bring-up
+  distinguishable from "no frames seen at all"; capture with
+  `pio device monitor -e feather_rp2040_can_hypery11 -b 115200 --raw |
+  tee logs/sniff-$(date +%Y%m%d-%H%M%S).log`.
 - 0x370 echo path matches hypery11: clear handsOnLevel bits 7:6 and force
   level=1, counter +1 (lower nibble, wraps), checksum
   `sum(b0..b6) + 0x70 + 0x03`.
@@ -112,23 +121,24 @@ native tests.
   now applies `setMode(CanMode::ListenOnly)` before `init()` when
   `LISTEN_ONLY_BOOT` is defined, then preserves it through `setFilters()`
   (Section 1 contract).
-- New env `native_hypery11` runs 33 tests covering Test Matrix items 3-14
+- New env `native_hypery11` runs 36 tests covering Test Matrix items 3-14
   (OTA gate, DAS parse, EPAS hands-on eligibility, DAS gate states 0/2/8,
   unseen DAS conservative echo, listen-only suppression via driver mode,
   nag-killer toggle, counter wrap, output checksum, torque envelope,
-  organic vs fixed torque, output ID/DLC, ignored unknown IDs, short DLC).
-  33/33 pass.
+  organic vs fixed torque, output ID/DLC, ignored unknown IDs, short DLC,
+  per-ID seen counters, `emitStatusIfDue` native no-op). 36/36 pass.
 - New firmware env `feather_rp2040_can_hypery11` selects
   `DRIVER_MCP2515 + FEATHER_HYPERY11 + LISTEN_ONLY_BOOT`.
 
 Regression on 2026-05-11: `native` (132/132), `native_nag` (28/28),
-`native_can_mode` (12/12), `native_hypery11` (33/33) — 205/205 across the four
+`native_can_mode` (12/12), `native_hypery11` (36/36) — 208/208 across the four
 suites.
 
 Firmware build sanity-check: `pio run -e feather_rp2040_can_hypery11` succeeded
 on 2026-05-11. The Feather build links cleanly with the new SelectedHandler
-dispatch + LISTEN_ONLY_BOOT block (RAM 3.6 %, Flash 0.8 %). `firmware.uf2` is
-produced under `ev-open-can-tools/.pio/build/feather_rp2040_can_hypery11/`.
+dispatch + LISTEN_ONLY_BOOT block + status emitter (RAM 3.6 %, Flash 0.9 %,
+76 864 bytes). `firmware.uf2` is produced under
+`ev-open-can-tools/.pio/build/feather_rp2040_can_hypery11/`.
 Note: the dedicated hypery11 env intentionally omits `extra_scripts =
 pre:scripts/platformio_sync_profile.py` because that script enforces the
 upstream `platformio_profile.h` workflow (LEGACY / HW3 / HW4 selection) which
@@ -136,14 +146,55 @@ does not yet know about `FEATHER_HYPERY11`. All defines come straight from
 the env's `build_flags` instead.
 
 Deferred from Sections 2 + 3:
-- Section 4 serial runtime interface (`STATUS`, `MODE`, `NAG`, `LOG`).
+- Section 4 serial *command* interface (`MODE LISTEN/ACTIVE`, `NAG ON/OFF`,
+  `LOG`). The Section 4 *print* path (periodic `[STATUS]`) is already
+  shipped; only the input/parser side is still pending.
 - Section 5 build flag refinement (currently `FEATHER_HYPERY11` is the only
   switch; the per-feature flags `DAS_AWARE_GATE_ENABLED` /
   `ORGANIC_TORQUE_ENABLED` are runtime toggles on the handler instead of
   compile flags).
+- On-device log persistence. `Serial.printf` is a live USB stream — nothing
+  on the Feather stores history across reboots. Durable capture happens at
+  the laptop side via the `tee` pipe shown above. If post-install historical
+  state becomes needed, plan calls for adding LittleFS + a `LOG` serial
+  command to replay the buffer over USB on demand.
 - Section 3 task 1's "act on raw value 2 only" interpretation note: the
   handler treats raw values 0/1/3 as not-installing and raw 2 as installing.
   This matches `fsd_handle_gtw_car_state` exactly.
+
+## Bring-Up Power and Diagnostics Cabling
+
+The Feather has one USB-C port and the current install routes car
+12 V → MP1584EN buck → 5 V → USB-C male into that port (see
+`PROGRESS.md` Done item 5). During bring-up you also need a laptop on
+the same USB-C port to capture status logs. Three options, in order of
+recommended use:
+
+1. **Bring-up: power from laptop only.** Unplug the buck's USB-C male
+   from the Feather, tape it off, plug the laptop in instead. X179 only
+   supplies CAN signals on green/white, which still reach the screw
+   terminals; ignition ON makes frames flow regardless of the Feather's
+   power source. Zero soldering, zero backfeed risk. Use this for the
+   first listen-only plug-in and any polarity-swap iterations.
+
+2. **Permanent install: car 5 V → BAT pad, USB-C free for laptop.** The
+   Feather RP2040 CAN has a BAT pad / JST connector that goes through
+   the onboard ORing diodes; USB-C and BAT can both be powered without
+   fighting because the higher voltage wins through separate diodes.
+   Cut off the buck's USB-C male, solder the buck's +5 V/GND to BAT/GND.
+   After this rewire the diagnostics workflow is "plug laptop in any
+   time, no power juggling." This is the right end-state once Goal A is
+   proven.
+
+3. **Both at once on USB-C (not recommended).** A USB-C data-only dongle
+   or a galvanic USB isolator (e.g. Adafruit 4090) lets the buck's 5 V
+   stay wired through the USB-C while the laptop sees data only. CC pin
+   negotiation makes the cheap kludge fragile, and the isolator is at
+   the same cost/effort as option 2. Skip unless option 2 is blocked
+   for some reason.
+
+The plan's earlier "Power note" was already directionally right but did
+not spell out the BAT-pad rewire; option 2 is the implementation of it.
 
 The selected host is `ev-open-can-tools` environment `feather_rp2040_can`,
 which targets the Adafruit Feather RP2040 CAN with MCP2515/MCP25625 using the

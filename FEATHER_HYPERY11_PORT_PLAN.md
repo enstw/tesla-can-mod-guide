@@ -1,6 +1,6 @@
 # Feather Hypery11 Port Plan
 
-Updated: 2026-05-11
+Updated: 2026-05-17
 
 This file is the resumable implementation plan for running hypery11-derived
 behavior on the selected Adafruit Feather RP2040 CAN hardware.
@@ -346,6 +346,26 @@ Minimum commands:
 4. `NAG ON` and `NAG OFF` toggle nag echo logic.
 5. `LOG` dumps the in-memory ring buffer.
 
+Wireless access (Bluefruit LE UART Friend, ordered 2026-05-16): the same
+`[STATUS]` print path and the command parser above must read/write a
+`Stream` that is both USB `Serial` *and* hardware `Serial1`. An Adafruit
+Bluefruit LE UART Friend wired to `Serial1` (free — MCP2515 is on SPI)
+then exposes status + `MODE/NAG/LOG` over BLE so the car-embedded Feather
+can be reached without opening the trim panel. Keep TX gating identical
+on both transports (listen-only / OTA-installing still block CAN TX
+regardless of which link issued `MODE ACTIVE`). See `PROGRESS.md`
+Decisions and `install-target.yaml` `hardware.diagnostics`.
+
+NeoPixel status indicator (accepted 2026-05-17): drive the Feather's
+onboard NeoPixel from the same state the `[STATUS]` line reports — red =
+no frames seen, amber = frames seen but no target IDs (`0x370`/`0x39B`),
+green = target IDs locked; encode listen-only vs active distinctly (e.g.
+slow breathe vs solid). This makes the in-car 4-combo X179
+polarity/pair sweep doable by glancing at the board instead of a laptop
+screen. It is a coarse field aid only — it cannot show which CAN ID is
+present, so it does not replace `[STATUS]` or the serial logs. Compile
+to a no-op on `NATIVE_BUILD` like `emitStatusIfDue`.
+
 Live log capture from a development machine:
 
 ```bash
@@ -466,7 +486,10 @@ build links cleanly. The next session should pick from:
    `driver.mode()`, `epasSeenCount`, `nagEchoCount`,
    `nagBlockedListenOnly`, `nagBlockedOta`, `otaInProgress`, `dasSeen`,
    `dasApState`, `dasHandsOnState`. Native-test the parser without CAN
-   hardware.
+   hardware. Mirror the print path and parser to `Serial1` for the
+   Bluefruit LE UART Friend (see Section 4 "Wireless access"), and drive
+   the onboard NeoPixel from the same state (see Section 4 "NeoPixel
+   status indicator") so the in-car X179 polarity sweep needs no laptop.
 2. **Bench CAN tests.** Per the existing Test Matrix "Bench CAN Tests"
    section, validate the firmware against a second CAN node before any
    vehicle TX.

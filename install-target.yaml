@@ -29,6 +29,14 @@ hardware:
     source: "X179 / Enhance Auto Gen 2 cable 12V"
     regulator: "MP1584EN fixed 5V 3A buck converter"
     output_to_board: "5V to Feather USB/GND via USB-C breakout or direct solder"
+  diagnostics:
+    wireless_module: "Adafruit Bluefruit LE UART Friend (nRF51 UART->BLE bridge)"
+    status: "selected 2026-05-16; to be ordered"
+    interface: "Feather hardware UART Serial1 (free; MCP2515 is on SPI)"
+    rationale: "Feather RP2040 CAN has no onboard radio. BLE chosen over Classic SPP for iOS+Android support; shares Feather's Adafruit ecosystem/app. Local-only RF, does not change CAN-side ban detection; unplug after bring-up for an RF-silent permanent state."
+    firmware_requirement: "Mirror the Serial [STATUS] emitter and the Section 4 command parser to Serial1 so status/control work over BLE without opening the trim panel."
+    status_indicator: "Accepted 2026-05-17: onboard NeoPixel coarse state (red=no frames, amber=frames but no target IDs, green=target IDs locked, plus listen-only vs active). Field aid for the 4-combo X179 sweep; does not replace [STATUS]. Implement with Section 4."
+    rejected_alternative: "Switching the permanent install to an integrated hypery11-supported ESP32 board (e.g. LilyGo T-CAN485). Rejected to preserve the bench-tested Feather power chain/TERM cut and avoid an always-on radio in a stealth-first build."
   cable:
     product: "Enhance Auto Gen 2 Cable"
     variant: "Model 3 Highland 2024+"
@@ -47,6 +55,7 @@ hardware:
     decision: "Use the pair that exposes 0x370, 0x39B, 0x3FD, and ideally 0x7FF; do not require a pure Body/Chassis label."
   unresolved:
     adapter_color_to_x179_pair: "pinout-labeled.png says green/white body and yellow/black other; restored x170-enhanced.png labels X179 pin 13/14 as chassis. Field-test both pairs and H/L polarity in listen-only mode."
+    spec_photo_status: "Starting hypothesis only, not confirmation (reaffirmed 2026-05-17). Sources disagree on color->pair and a photo cannot establish H/L polarity. Confirmation = target-frame visibility (0x370/0x39B) in listen-only across up to 4 combos. Firmware-loaded listen-only is the sniffer, so firmware load precedes wiring confirmation; no runtime active path until Section 4 ships."
 
 firmware:
   desired_behavior_source: "hypery11/flipper-tesla-fsd"
